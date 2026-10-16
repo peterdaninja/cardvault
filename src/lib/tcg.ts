@@ -14,14 +14,19 @@ async function query(q: string): Promise<TcgCard[]> {
 const clean = (s: string) => s.replace(/["\\]/g, '').trim()
 
 /** Find cards by name, collector number and printed set total. Falls back to looser queries. */
-export async function findCards(name: string, number?: string, total?: string): Promise<TcgCard[]> {
+export async function findCards(
+  name: string,
+  number?: string,
+  total?: string,
+  trustName = true,
+): Promise<TcgCard[]> {
   const n = clean(name)
   const num = number ? (/^\d+$/.test(number) ? String(parseInt(number, 10)) : number) : ''
   const tot = total && /^\d+$/.test(total) ? String(parseInt(total, 10)) : ''
 
   // A number plus printed set total (e.g. 4/102) pins down one card per set, so trust it over a
   // possibly misread name and only use the name to rank the results.
-  if (num && tot) {
+  if (num && tot && !trustName) {
     const found = await query(`number:${num} set.printedTotal:${tot}`)
     if (found.length) return rankByName(found, n)
   }
@@ -33,7 +38,16 @@ export async function findCards(name: string, number?: string, total?: string): 
 
   for (const q of attempts) {
     const found = await query(q)
-    if (found.length) return found
+    if (found.length) {
+      // The printed total can be misread, so use it only to float matching sets to the top.
+      if (tot) {
+        found.sort(
+          (a, b) =>
+            Number(String(b.set.printedTotal) === tot) - Number(String(a.set.printedTotal) === tot),
+        )
+      }
+      return found
+    }
   }
   return []
 }

@@ -20,16 +20,17 @@ export default function AddCard({ collections, defaultCollectionId, onAdd, onClo
   const [total, setTotal] = useState('')
   const [camera, setCamera] = useState(false)
   const [lastRead, setLastRead] = useState('')
+  const [trustName, setTrustName] = useState(true)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [results, setResults] = useState<TcgCard[]>([])
   const [added, setAdded] = useState<string[]>([])
 
-  async function search(n = name, num = number, tot = total) {
+  async function search(n = name, num = number, tot = total, trust = trustName) {
     setError('')
     setBusy('Searching…')
     try {
-      const found = await findCards(n, num, tot)
+      const found = await findCards(n, num, tot, trust)
       setResults(found)
       if (!found.length) setError('No matches. Edit the name or number and search again.')
     } catch (e) {
@@ -49,13 +50,14 @@ export default function AddCard({ collections, defaultCollectionId, onAdd, onClo
       setName(scanned.name)
       setNumber(scanned.number)
       setTotal(scanned.total)
+      setTrustName(scanned.nameConfident)
       setLastRead(scanned.rawText)
       if (!scanned.name && !scanned.number) {
         setBusy('')
         setError('Could not read the card. Try again with less glare, or type the name.')
         return
       }
-      await search(scanned.name, scanned.number, scanned.total)
+      await search(scanned.name, scanned.number, scanned.total, scanned.nameConfident)
     } catch (e) {
       setBusy('')
       setError(e instanceof Error ? e.message : 'Scan failed')
@@ -131,7 +133,10 @@ export default function AddCard({ collections, defaultCollectionId, onAdd, onClo
         <div className="row">
           <label className="field grow">
             Name
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Pikachu" />
+            <input value={name} onChange={(e) => {
+                setName(e.target.value)
+                setTrustName(true)
+              }} placeholder="Pikachu" />
           </label>
           <label className="field num">
             No.

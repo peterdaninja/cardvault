@@ -4,6 +4,8 @@ import { exportJson, loadState, parseImport, saveState, uid } from './lib/store'
 import type { AppState, OwnedCard } from './lib/types'
 import './App.css'
 
+declare const __BUILD__: string
+
 const money = (n: number) => `$${n.toFixed(2)}`
 
 export default function App() {
@@ -170,6 +172,7 @@ export default function App() {
             onChange={(e) => { onImport(e.target.files?.[0]); e.target.value = '' }} />
         </div>
       </div>
+      <p className="hint" style={{ textAlign: 'center' }}>Version {__BUILD__} UTC</p>
       {state.collections.length > 0 && (
         <button className="fab" onClick={() => setAdding(true)} aria-label="Add card">+</button>
       )}

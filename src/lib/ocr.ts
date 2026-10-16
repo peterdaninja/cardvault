@@ -5,11 +5,12 @@ export interface ScanResult {
   name: string
   number: string // collector number, e.g. "58" (from "58/102") or "TG05"
   total: string // printed set total, e.g. "102", when visible
+  nameConfident: boolean // true when the name matched a known Pokémon closely
   rawText: string // what the reader saw, shown to the user for debugging
 }
 
 let workerPromise: Promise<Worker> | null = null
-const getWorker = () => (workerPromise ??= createWorker('eng'))
+export const getWorker = () => (workerPromise ??= createWorker('eng'))
 
 /** Draw a photo onto a canvas, downscaled so very large camera photos stay fast. */
 export async function fileToCanvas(file: File): Promise<HTMLCanvasElement> {
@@ -33,7 +34,7 @@ export async function fileToCanvas(file: File): Promise<HTMLCanvasElement> {
  * Crop a region (fractions of the card), upscale, grayscale and stretch contrast.
  * `invert` handles light text on dark backgrounds (many full-art / dark-type cards).
  */
-function prep(
+export function prep(
   card: HTMLCanvasElement,
   [x0, y0, x1, y1]: [number, number, number, number],
   invert: boolean,
@@ -88,7 +89,7 @@ function prep(
   return out
 }
 
-async function read(worker: Worker, canvas: HTMLCanvasElement, psm: '6' | '7', whitelist = '') {
+export async function read(worker: Worker, canvas: HTMLCanvasElement, psm: '6' | '7', whitelist = '') {
   await worker.setParameters({
     tessedit_pageseg_mode: psm as never,
     tessedit_char_whitelist: whitelist,
@@ -121,7 +122,12 @@ export function parseNumber(text: string): { number: string; total: string } {
 
 const NAME_BAND: [number, number, number, number] = [0.05, 0.035, 0.76, 0.125]
 const WIDE_BAND: [number, number, number, number] = [0, 0, 1, 0.16]
-const NUMBER_BAND: [number, number, number, number] = [0, 0.9, 1, 1]
+// Modern cards print the number bottom-left, older ones bottom-right; read both small strips.
+const NUMBER_BANDS: [number, number, number, number][] = [
+  [0.03, 0.93, 0.5, 0.995],
+  [0.5, 0.93, 0.97, 0.995],
+]
+const NUMBER_CHARS = '0123456789/ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 
 /** Read a card that has already been cropped to the card edges. */
 export async function scanCanvas(
@@ -159,20 +165,41 @@ export async function scanCanvas(
   }
 
   onProgress?.('Reading card number…')
-  const numTexts = [
-    await read(worker, prep(card, NUMBER_BAND, false), '6'),
-    await read(worker, prep(card, NUMBER_BAND, true), '6'),
-  ]
-  let parsed = { number: '', total: '' }
-  for (const t of numTexts) {
-    const p = parseNumber(t)
-    if (p.number && (!parsed.number || (p.total && !parsed.total))) parsed = p
+  const numTexts: string[] = []
+  const votes = new Map<string, { count: number; totals: Map<string, number> }>()
+  for (const band of NUMBER_BANDS) {
+    for (const invert of [true, false]) {
+      for (const psm of ['7', '6'] as const) {
+        const t = await read(worker, prep(card, band, invert), psm, psm === '7' ? NUMBER_CHARS : '')
+        numTexts.push(t)
+        const p = parseNumber(t)
+        if (!p.number) continue
+        const v = votes.get(p.number) ?? { count: 0, totals: new Map() }
+        v.count++
+        if (p.total) v.totals.set(p.total, (v.totals.get(p.total) ?? 0) + 1)
+        votes.set(p.number, v)
+      }
+    }
+  }
+  // Most-voted number wins. The printed total misreads more often (128 read as 728 or 129),
+  // so only keep it when two separate reads agree.
+  let number = ''
+  let total = ''
+  let top = 0
+  for (const [n, v] of votes) {
+    if (v.count <= top) continue
+    top = v.count
+    number = n
+    const [t, c] = [...v.totals.entries()].sort((x, y) => y[1] - x[1])[0] ?? ['', 0]
+    total = c >= 2 ? t : ''
   }
 
+  const squash = (s: string) => s.replace(/\s+/g, ' ')
   return {
     name,
-    number: parsed.number,
-    total: parsed.total,
-    rawText: `Name: ${nameTexts[0].replace(/\s+/g, ' ')} | Number: ${numTexts[0].replace(/\s+/g, ' ')}`,
+    number,
+    total,
+    nameConfident: !!best && best.score >= 0.85,
+    rawText: `Name: ${squash(nameTexts[0])} | Number: ${squash(numTexts.filter(Boolean).join(' / ')).slice(0, 80)}`,
   }
 }
