@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import AddCard from './AddCard'
+import BulkScan from './BulkScan'
 import { exportJson, loadState, parseImport, saveState, uid } from './lib/store'
 import type { AppState, OwnedCard } from './lib/types'
 import './App.css'
@@ -12,6 +13,7 @@ export default function App() {
   const [state, setState] = useState<AppState | null>(null)
   const [openId, setOpenId] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
+  const [bulk, setBulk] = useState(false)
   const [filter, setFilter] = useState('')
   const importRef = useRef<HTMLInputElement>(null)
 
@@ -90,6 +92,20 @@ export default function App() {
         defaultCollectionId={defaultCol}
         onAdd={addCard}
         onClose={() => setAdding(false)}
+        onBulk={() => {
+          setAdding(false)
+          setBulk(true)
+        }}
+      />
+    ) : null
+
+  const bulkSheet =
+    bulk && state.collections.length ? (
+      <BulkScan
+        collections={state.collections}
+        defaultCollectionId={defaultCol}
+        onAdd={addCard}
+        onClose={() => setBulk(false)}
       />
     ) : null
 
@@ -131,6 +147,8 @@ export default function App() {
         </div>
         <button className="fab" onClick={() => setAdding(true)} aria-label="Add card">+</button>
         {addSheet}
+        {bulkSheet}
+      {bulkSheet}
       </div>
     )
   }
@@ -177,6 +195,7 @@ export default function App() {
         <button className="fab" onClick={() => setAdding(true)} aria-label="Add card">+</button>
       )}
       {addSheet}
+      {bulkSheet}
     </div>
   )
 }

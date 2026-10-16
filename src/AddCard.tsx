@@ -10,9 +10,10 @@ interface Props {
   defaultCollectionId: string
   onAdd: (card: OwnedCard) => void
   onClose: () => void
+  onBulk: () => void
 }
 
-export default function AddCard({ collections, defaultCollectionId, onAdd, onClose }: Props) {
+export default function AddCard({ collections, defaultCollectionId, onAdd, onClose, onBulk }: Props) {
   const fileRef = useRef<HTMLInputElement>(null)
   const [collectionId, setCollectionId] = useState(defaultCollectionId)
   const [name, setName] = useState('')
@@ -128,6 +129,7 @@ export default function AddCard({ collections, defaultCollectionId, onAdd, onClo
         <button className="link" disabled={!!busy} onClick={() => fileRef.current?.click()}>
           Choose photo instead
         </button>
+        <button className="big" onClick={onBulk}>⚡ Auto scan (hands-free, for a phone mount)</button>
         <p className="hint">Fill the frame with one card, flat and well lit.</p>
 
         <div className="row">

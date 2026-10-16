@@ -133,21 +133,27 @@ const NUMBER_CHARS = '0123456789/ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 export async function scanCanvas(
   card: HTMLCanvasElement,
   onProgress?: (msg: string) => void,
+  /** Bulk mode: stop reading as soon as the name and number are clear, instead of trying every variant. */
+  fast = false,
 ): Promise<ScanResult> {
   onProgress?.('Loading text reader…')
   const [worker, species] = await Promise.all([getWorker(), getSpeciesNames()])
 
   onProgress?.('Reading card name…')
   const nameTexts: string[] = []
-  for (const invert of [false, true]) {
-    nameTexts.push(await read(worker, prep(card, NAME_BAND, invert), '7'))
-    nameTexts.push(await read(worker, prep(card, WIDE_BAND, invert), '6'))
-  }
-
   let best: { species: string; score: number } | null = null
-  for (const t of nameTexts) {
+  const namePasses: [[number, number, number, number], boolean, '6' | '7'][] = [
+    [NAME_BAND, false, '7'],
+    [NAME_BAND, true, '7'],
+    [WIDE_BAND, false, '6'],
+    [WIDE_BAND, true, '6'],
+  ]
+  for (const [band, invert, psm] of namePasses) {
+    const t = await read(worker, prep(card, band, invert), psm)
+    nameTexts.push(t)
     const m = bestSpecies(t, species)
     if (m && (!best || m.score > best.score)) best = m
+    if (fast && best && best.score >= 0.85) break
   }
 
   let name = ''
@@ -167,19 +173,21 @@ export async function scanCanvas(
   onProgress?.('Reading card number…')
   const numTexts: string[] = []
   const votes = new Map<string, { count: number; totals: Map<string, number> }>()
-  for (const band of NUMBER_BANDS) {
-    for (const invert of [true, false]) {
-      for (const psm of ['7', '6'] as const) {
-        const t = await read(worker, prep(card, band, invert), psm, psm === '7' ? NUMBER_CHARS : '')
-        numTexts.push(t)
-        const p = parseNumber(t)
-        if (!p.number) continue
-        const v = votes.get(p.number) ?? { count: 0, totals: new Map() }
-        v.count++
-        if (p.total) v.totals.set(p.total, (v.totals.get(p.total) ?? 0) + 1)
-        votes.set(p.number, v)
-      }
-    }
+  // Most reliable reads first, so fast mode can stop after two agreeing results.
+  const numberPasses: [number, boolean, '6' | '7'][] = [
+    [0, true, '7'], [0, true, '6'], [1, true, '7'], [1, true, '6'],
+    [0, false, '7'], [1, false, '7'], [0, false, '6'], [1, false, '6'],
+  ]
+  for (const [bandIndex, invert, psm] of numberPasses) {
+    const t = await read(worker, prep(card, NUMBER_BANDS[bandIndex], invert), psm, psm === '7' ? NUMBER_CHARS : '')
+    numTexts.push(t)
+    const p = parseNumber(t)
+    if (!p.number) continue
+    const v = votes.get(p.number) ?? { count: 0, totals: new Map() }
+    v.count++
+    if (p.total) v.totals.set(p.total, (v.totals.get(p.total) ?? 0) + 1)
+    votes.set(p.number, v)
+    if (fast && v.count >= 2) break
   }
   // Most-voted number wins. The printed total misreads more often (128 read as 728 or 129),
   // so only keep it when two separate reads agree.

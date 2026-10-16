@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { cropGuide } from './lib/frame'
 
 interface Props {
   onCapture: (card: HTMLCanvasElement) => void
@@ -39,27 +40,9 @@ export default function Camera({ onCapture, onCancel }: Props) {
   }, [])
 
   function capture() {
-    const video = videoRef.current
-    const box = boxRef.current
-    const guide = guideRef.current
-    if (!video || !box || !guide || !video.videoWidth) return
-
-    // The video is shown with object-fit: cover; map the guide rectangle back to video pixels.
-    const b = box.getBoundingClientRect()
-    const g = guide.getBoundingClientRect()
-    const scale = Math.max(b.width / video.videoWidth, b.height / video.videoHeight)
-    const offX = (video.videoWidth * scale - b.width) / 2
-    const offY = (video.videoHeight * scale - b.height) / 2
-    const sx = (g.left - b.left + offX) / scale
-    const sy = (g.top - b.top + offY) / scale
-    const sw = g.width / scale
-    const sh = g.height / scale
-
-    const out = document.createElement('canvas')
-    out.width = Math.round(sw)
-    out.height = Math.round(sh)
-    out.getContext('2d')!.drawImage(video, sx, sy, sw, sh, 0, 0, out.width, out.height)
-    onCapture(out)
+    if (!videoRef.current || !boxRef.current || !guideRef.current) return
+    const card = cropGuide(videoRef.current, boxRef.current, guideRef.current)
+    if (card) onCapture(card)
   }
 
   return (

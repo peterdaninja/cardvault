@@ -1,5 +1,6 @@
 import { levenshtein, norm } from './names'
-import type { TcgCard } from './types'
+import { uid } from './store'
+import type { OwnedCard, TcgCard } from './types'
 
 const API = 'https://api.pokemontcg.io/v2/cards'
 
@@ -90,4 +91,20 @@ export function marketPrice(card: TcgCard): number | null {
     if (variant.market != null) return variant.market
   }
   return null
+}
+
+export function toOwned(c: TcgCard, collectionId: string): OwnedCard {
+  return {
+    id: uid(),
+    collectionId,
+    cardId: c.id,
+    name: c.name,
+    setName: c.set.name,
+    number: c.number,
+    rarity: c.rarity ?? '',
+    image: c.images.small,
+    price: marketPrice(c),
+    qty: 1,
+    addedAt: Date.now(),
+  }
 }
