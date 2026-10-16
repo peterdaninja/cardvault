@@ -16,6 +16,7 @@ interface Props {
 export default function AddCard({ collections, defaultCollectionId, onAdd, onClose, onBulk }: Props) {
   const fileRef = useRef<HTMLInputElement>(null)
   const [collectionId, setCollectionId] = useState(defaultCollectionId)
+  const collection = collections.find((c) => c.id === collectionId)
   const [name, setName] = useState('')
   const [number, setNumber] = useState('')
   const [total, setTotal] = useState('')
@@ -31,9 +32,13 @@ export default function AddCard({ collections, defaultCollectionId, onAdd, onClo
     setError('')
     setBusy('Searching…')
     try {
-      const found = await findCards(n, num, tot, trust)
+      const found = await findCards(n, num, tot, trust, collection?.setId)
       setResults(found)
-      if (!found.length) setError('No matches. Edit the name or number and search again.')
+      if (!found.length) setError(
+          collection?.setName
+            ? `No match in ${collection.setName}. Edit the name or number, or change the collection's set.`
+            : 'No matches. Edit the name or number and search again.',
+        )
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Search failed')
     } finally {
@@ -130,7 +135,11 @@ export default function AddCard({ collections, defaultCollectionId, onAdd, onClo
           Choose photo instead
         </button>
         <button className="big" onClick={onBulk}>⚡ Auto scan (hands-free, for a phone mount)</button>
-        <p className="hint">Fill the frame with one card, flat and well lit.</p>
+        <p className="hint">
+          {collection?.setName
+            ? `Searching only in ${collection.setName}.`
+            : 'Fill the frame with one card, flat and well lit.'}
+        </p>
 
         <div className="row">
           <label className="field grow">

@@ -2,6 +2,8 @@ export interface Collection {
   id: string
   name: string
   createdAt: number
+  setId?: string // when set, searches in this collection only look inside that set
+  setName?: string
 }
 
 export interface OwnedCard {

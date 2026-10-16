@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import AddCard from './AddCard'
 import BulkScan from './BulkScan'
+import SetPicker from './SetPicker'
+import type { TcgSet } from './lib/sets'
 import { exportJson, loadState, parseImport, saveState, uid } from './lib/store'
 import type { AppState, OwnedCard } from './lib/types'
 import './App.css'
@@ -14,6 +16,7 @@ export default function App() {
   const [openId, setOpenId] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
   const [bulk, setBulk] = useState(false)
+  const [picker, setPicker] = useState<{ mode: 'new'; name: string } | { mode: 'edit'; id: string } | null>(null)
   const [filter, setFilter] = useState('')
   const importRef = useRef<HTMLInputElement>(null)
 
@@ -44,7 +47,24 @@ export default function App() {
   function newCollection() {
     const name = prompt('Collection name (e.g. Base Set, Charizard, Binder 1)')?.trim()
     if (!name) return
-    update({ ...state!, collections: [...state!.collections, { id: uid(), name, createdAt: Date.now() }] })
+    setPicker({ mode: 'new', name }) // next: optionally limit it to one set
+  }
+
+  function applySet(picked: TcgSet | null) {
+    if (!picker) return
+    const setFields = { setId: picked?.id, setName: picked?.name }
+    if (picker.mode === 'new') {
+      update({
+        ...state!,
+        collections: [...state!.collections, { id: uid(), name: picker.name, createdAt: Date.now(), ...setFields }],
+      })
+    } else {
+      update({
+        ...state!,
+        collections: state!.collections.map((c) => (c.id === picker.id ? { ...c, ...setFields } : c)),
+      })
+    }
+    setPicker(null)
   }
 
   function deleteCollection(id: string) {
@@ -99,6 +119,15 @@ export default function App() {
       />
     ) : null
 
+  const pickerSheet = picker ? (
+    <SetPicker
+      title={picker.mode === 'new' ? 'Limit to a set?' : 'Collection set'}
+      currentId={picker.mode === 'edit' ? state.collections.find((c) => c.id === picker.id)?.setId : undefined}
+      onPick={applySet}
+      onCancel={() => setPicker(null)}
+    />
+  ) : null
+
   const bulkSheet =
     bulk && state.collections.length ? (
       <BulkScan
@@ -125,6 +154,9 @@ export default function App() {
         </header>
         <div className="pad">
           <p className="summary">{t?.count ?? 0} cards · {money(t?.value ?? 0)}</p>
+          <button className="setrow" onClick={() => setPicker({ mode: 'edit', id: open.id })}>
+            Set: {open.setName ?? 'Any (search everything)'} ›
+          </button>
           <input className="search" placeholder="Filter by name or set" value={filter} onChange={(e) => setFilter(e.target.value)} />
           {cards.length === 0 && <p className="hint">No cards yet. Tap + to scan one.</p>}
           <div className="grid">
@@ -148,7 +180,9 @@ export default function App() {
         <button className="fab" onClick={() => setAdding(true)} aria-label="Add card">+</button>
         {addSheet}
         {bulkSheet}
+{pickerSheet}
       {bulkSheet}
+{pickerSheet}
       </div>
     )
   }
@@ -178,6 +212,7 @@ export default function App() {
                 <div>
                   <strong>{c.name}</strong>
                   <span>{t?.count ?? 0} cards · {money(t?.value ?? 0)}</span>
+                  {c.setName && <span>Set: {c.setName}</span>}
                 </div>
               </li>
             )
@@ -196,6 +231,7 @@ export default function App() {
       )}
       {addSheet}
       {bulkSheet}
+{pickerSheet}
     </div>
   )
 }

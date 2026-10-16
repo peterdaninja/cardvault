@@ -63,3 +63,7 @@ button:disabled { opacity: .5; }
 .cands { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .cands button { padding: 6px 10px; font-size: 12px; }
 .big + .big { margin-top: 10px; }
+.setrow { width: 100%; text-align: left; margin-bottom: 12px; }
+.picker { z-index: 40; }
+.picker .results li { cursor: pointer; }
+.sym { width: 32px; height: 32px; object-fit: contain; }

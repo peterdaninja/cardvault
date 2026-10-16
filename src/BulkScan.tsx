@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { beep, cropGuide, guideSignature, sigDiff } from './lib/frame'
+import { levenshtein, norm } from './lib/names'
 import { scanCanvas } from './lib/ocr'
 import { findCards, toOwned } from './lib/tcg'
 import type { Collection, OwnedCard, TcgCard } from './lib/types'
@@ -191,7 +192,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
       setStatus(`Looking up ${scan.name || 'card'} ${scan.number}…`)
       let results: TcgCard[] = []
       try {
-        results = await findCards(scan.name, scan.number, scan.total, scan.nameConfident)
+        results = await findCards(scan.name, scan.number, scan.total, scan.nameConfident, setIdRef.current)
       } catch (e) {
         addReview({
           key,
@@ -202,7 +203,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
         return
       }
 
-      const pick = confidentMatch(results, scan.nameConfident && !!scan.number, scan.total)
+      const pick = confidentMatch(results, scan.nameConfident && !!scan.number, scan.total, !!setIdRef.current && !!scan.number, scan.name)
       if (pick) {
         onAddRef.current(toOwned(pick, collectionRef.current))
         setAdded((a) => [
@@ -244,7 +245,11 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
     setReview((r) => r.filter((x) => x.key !== item.key))
   }
 
-  const colName = collections.find((c) => c.id === collectionId)?.name ?? ''
+  const col = collections.find((c) => c.id === collectionId)
+  const colName = col?.name ?? ''
+  const setId = col?.setId
+  const setIdRef = useRef(setId)
+  setIdRef.current = setId
 
   return (
     <div className="bulk">
@@ -334,8 +339,23 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
  * Auto-add only when the match is clear: a confidently read name plus number that leads to
  * exactly one card, or to one card whose set total agrees with the printed total.
  */
-function confidentMatch(results: TcgCard[], confident: boolean, total: string): TcgCard | null {
-  if (!confident || !results.length) return null
+function confidentMatch(
+  results: TcgCard[],
+  confident: boolean,
+  total: string,
+  setLocked: boolean,
+  readName: string,
+): TcgCard | null {
+  if (!results.length) return null
+  // In a set-locked collection a collector number is unique, so one result is enough as long as the
+  // name is not contradicting it.
+  if (setLocked && results.length === 1) {
+    const a = norm(readName)
+    const b = norm(results[0].name)
+    const sim = a && b ? 1 - levenshtein(a, b) / Math.max(a.length, b.length) : 0
+    if (confident || sim >= 0.6) return results[0]
+  }
+  if (!confident) return null
   if (results.length === 1) return results[0]
   if (total) {
     const sameTotal = results.filter((c) => String(c.set.printedTotal) === total)

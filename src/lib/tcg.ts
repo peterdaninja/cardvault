@@ -44,10 +44,25 @@ export async function findCards(
   number?: string,
   total?: string,
   trustName = true,
+  /** Restrict every search to one set, e.g. "me55". Within a set the collector number is unique. */
+  setId?: string,
 ): Promise<TcgCard[]> {
   const n = clean(name)
   const num = number ? (/^\d+$/.test(number) ? String(parseInt(number, 10)) : number) : ''
   const tot = total && /^\d+$/.test(total) ? String(parseInt(total, 10)) : ''
+
+  if (setId) {
+    const inSet = `set.id:${setId}`
+    const attempts: string[] = []
+    if (n && num) attempts.push(`name:"${n}*" number:${num} ${inSet}`)
+    if (num) attempts.push(`number:${num} ${inSet}`)
+    if (n) attempts.push(`name:"${n}*" ${inSet}`)
+    for (const q of attempts) {
+      const found = await query(q)
+      if (found.length) return rankByName(found, n)
+    }
+    return [] // never fall back to cards outside the chosen set
+  }
 
   // A number plus printed set total (e.g. 4/102) pins down one card per set, so trust it over a
   // possibly misread name and only use the name to rank the results.
