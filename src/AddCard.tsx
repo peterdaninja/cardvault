@@ -149,7 +149,7 @@ export default function AddCard({ collections, defaultCollectionId, onAdd, onClo
                 setNumber(e.target.value)
                 setTotal('')
               }}
-              placeholder="25"
+              placeholder="e.g. 120"
             />
           </label>
         </div>
