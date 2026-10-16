@@ -4,6 +4,7 @@ export interface Collection {
   createdAt: number
   setId?: string // when set, searches in this collection only look inside that set
   setName?: string
+  setTotal?: number // printed card count of the set, used for the completion bar
 }
 
 export interface OwnedCard {

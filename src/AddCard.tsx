@@ -131,10 +131,12 @@ export default function AddCard({ collections, defaultCollectionId, onAdd, onClo
         <button className="primary big" disabled={!!busy} onClick={() => setCamera(true)}>
           📷 Scan a card
         </button>
-        <button className="link" disabled={!!busy} onClick={() => fileRef.current?.click()}>
-          Choose photo instead
-        </button>
-        <button className="big" onClick={onBulk}>⚡ Auto scan (hands-free, for a phone mount)</button>
+        <div className="row" style={{ marginTop: 10 }}>
+          <button className="grow" disabled={!!busy} onClick={() => fileRef.current?.click()}>
+            🖼 Choose photo
+          </button>
+          <button className="grow" onClick={onBulk}>⚡ Auto scan</button>
+        </div>
         <p className="hint">
           {collection?.setName
             ? `Searching only in ${collection.setName}.`
