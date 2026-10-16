@@ -12,10 +12,10 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['icon.svg', 'apple-touch-icon.png'],
       manifest: {
-        name: 'CardVault',
-        short_name: 'CardVault',
+        name: 'SLOWTCG',
+        short_name: 'SLOWTCG',
         description: 'Scan and organize your Pokémon cards',
-        theme_color: '#e3350d',
+        theme_color: '#0a0c11',
         background_color: '#0f1114',
         display: 'standalone',
         start_url: '.',

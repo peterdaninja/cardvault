@@ -4,7 +4,8 @@ export interface Collection {
   createdAt: number
   setId?: string // when set, searches in this collection only look inside that set
   setName?: string
-  setTotal?: number // printed card count of the set, used for the completion bar
+  setTotal?: number // printed card count of the set
+  setLogo?: string
 }
 
 export interface OwnedCard {
@@ -21,9 +22,18 @@ export interface OwnedCard {
   addedAt: number
 }
 
+/** One point on the collection-value chart. */
+export interface Snapshot {
+  t: number // ms since epoch
+  value: number // total USD value of everything owned
+  count: number // total cards owned (including duplicates)
+}
+
 export interface AppState {
   collections: Collection[]
   cards: OwnedCard[]
+  history?: Snapshot[]
+  pricesUpdatedAt?: number
 }
 
 export interface TcgCard {
@@ -31,7 +41,14 @@ export interface TcgCard {
   name: string
   number: string
   rarity?: string
-  set: { name: string; printedTotal?: number; releaseDate?: string }
+  set: {
+    id?: string
+    name: string
+    printedTotal?: number
+    total?: number
+    releaseDate?: string
+    images?: { logo?: string; symbol?: string }
+  }
   images: { small: string; large: string }
   tcgplayer?: { prices?: Record<string, { market?: number | null }> }
 }

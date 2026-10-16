@@ -20,7 +20,7 @@ export function exportJson(state: AppState): void {
   const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' })
   const a = document.createElement('a')
   a.href = URL.createObjectURL(blob)
-  a.download = `cardvault-backup-${new Date().toISOString().slice(0, 10)}.json`
+  a.download = `slowtcg-backup-${new Date().toISOString().slice(0, 10)}.json`
   a.click()
   URL.revokeObjectURL(a.href)
 }
@@ -28,7 +28,7 @@ export function exportJson(state: AppState): void {
 export async function parseImport(file: File): Promise<AppState> {
   const data = JSON.parse(await file.text())
   if (!Array.isArray(data?.collections) || !Array.isArray(data?.cards)) {
-    throw new Error('Not a CardVault backup file')
+    throw new Error('Not a SLOWTCG backup file')
   }
   return data as AppState
 }

@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { beep, cropGuide, guideSignature, sigDiff } from './lib/frame'
 import { levenshtein, norm } from './lib/names'
 import { scanCanvas } from './lib/ocr'
-import { findCards, toOwned } from './lib/tcg'
+import { findCards, marketPrice, toOwned } from './lib/tcg'
+import { money } from './ui/format'
 import type { Collection, OwnedCard, TcgCard } from './lib/types'
 
 interface Props {
@@ -24,6 +25,7 @@ interface AddedItem {
   name: string
   image: string
   detail: string
+  price: number | null
 }
 
 const RATIO = 63 / 88
@@ -207,7 +209,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
       if (pick) {
         onAddRef.current(toOwned(pick, collectionRef.current))
         setAdded((a) => [
-          { key, name: pick.name, image: pick.images.small, detail: `${pick.set.name} · #${pick.number}` },
+          { key, name: pick.name, image: pick.images.small, detail: `${pick.set.name} · #${pick.number}`, price: marketPrice(pick) },
           ...a,
         ].slice(0, 30))
         beep(880, 110)
@@ -238,7 +240,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
     if (card) {
       onAdd(toOwned(card, collectionId))
       setAdded((a) => [
-        { key: item.key, name: card.name, image: card.images.small, detail: `${card.set.name} · #${card.number}` },
+        { key: item.key, name: card.name, image: card.images.small, detail: `${card.set.name} · #${card.number}`, price: marketPrice(card) },
         ...a,
       ].slice(0, 30))
     }
@@ -316,7 +318,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
 
         {added.length > 0 && (
           <>
-            <h3>Added</h3>
+            <h3>Recently scanned <span className="tray-total">{money(added.reduce((s, a) => s + (a.price ?? 0), 0))} total</span></h3>
             <ul className="results">
               {added.map((a) => (
                 <li key={a.key}>
@@ -325,6 +327,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
                     <strong>{a.name}</strong>
                     <span>{a.detail}</span>
                   </div>
+                  <b className="tray-total">{a.price != null ? money(a.price) : '—'}</b>
                 </li>
               ))}
             </ul>

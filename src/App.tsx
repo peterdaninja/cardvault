@@ -2,42 +2,54 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import AddCard from './AddCard'
 import BulkScan from './BulkScan'
 import SetPicker from './SetPicker'
+import { withSnapshot } from './lib/history'
+import { refreshPrices } from './lib/prices'
 import type { TcgSet } from './lib/sets'
 import { exportJson, loadState, parseImport, saveState, uid } from './lib/store'
-import type { AppState, Collection, OwnedCard } from './lib/types'
+import { toOwned } from './lib/tcg'
+import type { AppState, Collection, OwnedCard, TcgCard } from './lib/types'
+import CollectionView from './screens/CollectionView'
+import Home from './screens/Home'
+import Settings from './screens/Settings'
+import BottomNav, { type Tab } from './ui/BottomNav'
+import { money } from './ui/format'
+import { PlusIcon } from './ui/icons'
 import './App.css'
-
-declare const __BUILD__: string
-
-const money = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+import './screens.css'
 
 type PickerState = { mode: 'new'; name: string } | { mode: 'edit'; id: string } | null
 
-function Pokeball() {
-  return (
-    <svg viewBox="0 0 64 64" aria-hidden="true">
-      <circle cx="32" cy="32" r="28" fill="none" stroke="currentColor" strokeWidth="4" />
-      <path d="M4 32h56" stroke="currentColor" strokeWidth="4" />
-      <circle cx="32" cy="32" r="9" fill="var(--bg)" stroke="currentColor" strokeWidth="4" />
-    </svg>
-  )
-}
+const PRICE_REFRESH_MS = 20 * 60 * 60 * 1000
 
 export default function App() {
   const [state, setState] = useState<AppState | null>(null)
+  const [tab, setTab] = useState<Tab>('home')
   const [openId, setOpenId] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
   const [bulk, setBulk] = useState(false)
   const [picker, setPicker] = useState<PickerState>(null)
   const [detailId, setDetailId] = useState<string | null>(null)
-  const [filter, setFilter] = useState('')
-  const importRef = useRef<HTMLInputElement>(null)
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshNote, setRefreshNote] = useState('')
+  const latest = useRef<AppState | null>(null)
+  latest.current = state
 
   useEffect(() => {
-    loadState().then(setState)
+    loadState().then((loaded) => {
+      const next = withSnapshot(loaded) // builds the value history for data saved before it existed
+      setState(next)
+      if (next !== loaded) saveState(next)
+    })
   }, [])
 
-  // Per-collection card count, unique cards and value.
+  // Re-price owned cards about once a day, quietly, when the app opens.
+  const autoRan = useRef(false)
+  useEffect(() => {
+    if (!state || autoRan.current) return
+    autoRan.current = true
+    if (state.cards.length && Date.now() - (state.pricesUpdatedAt ?? 0) > PRICE_REFRESH_MS) runRefresh(false)
+  }, [state]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const totals = useMemo(() => {
     const byCol = new Map<string, { count: number; value: number; unique: Set<string> }>()
     for (const c of state?.cards ?? []) {
@@ -53,8 +65,37 @@ export default function App() {
   if (!state) return <div className="app"><p className="status">Loading…</p></div>
 
   function update(next: AppState) {
-    setState(next)
-    saveState(next)
+    const withHistory = withSnapshot(next)
+    setState(withHistory)
+    saveState(withHistory)
+  }
+
+  /** Functional update for async callers that must not overwrite changes made in the meantime. */
+  function updateWith(fn: (s: AppState) => AppState) {
+    if (latest.current) update(fn(latest.current))
+  }
+
+  async function runRefresh(manual: boolean) {
+    const current = latest.current
+    if (!current?.cards.length) return
+    setRefreshing(true)
+    setRefreshNote('')
+    try {
+      const { cards: priced, failedSets } = await refreshPrices(current.cards)
+      updateWith((s) => {
+        const byId = new Map(priced.map((c) => [c.id, c.price]))
+        return {
+          ...s,
+          cards: s.cards.map((c) => (byId.has(c.id) ? { ...c, price: byId.get(c.id) ?? c.price } : c)),
+          pricesUpdatedAt: failedSets === 0 ? Date.now() : s.pricesUpdatedAt,
+        }
+      })
+      if (manual) {
+        setRefreshNote(failedSets ? `${failedSets} set${failedSets === 1 ? '' : 's'} couldn't be reached, try again soon.` : 'Prices are up to date.')
+      }
+    } finally {
+      setRefreshing(false)
+    }
   }
 
   const open = state.collections.find((c) => c.id === openId)
@@ -63,29 +104,36 @@ export default function App() {
   function newCollection() {
     const name = prompt('Collection name (e.g. Base Set, Charizard, Binder 1)')?.trim()
     if (!name) return
+    setTab('collections')
     setPicker({ mode: 'new', name }) // next: optionally limit it to one set
   }
 
   function applySet(picked: TcgSet | null) {
     if (!picker) return
-    const setFields = { setId: picked?.id, setName: picked?.name, setTotal: picked?.printedTotal }
+    const setFields = {
+      setId: picked?.id,
+      setName: picked?.name,
+      setTotal: picked ? (picked.total ?? picked.printedTotal) : undefined,
+      setLogo: picked?.logo,
+    }
     if (picker.mode === 'new') {
-      update({
-        ...state!,
-        collections: [...state!.collections, { id: uid(), name: picker.name, createdAt: Date.now(), ...setFields }],
-      })
+      const id = uid()
+      update({ ...state!, collections: [...state!.collections, { id, name: picker.name, createdAt: Date.now(), ...setFields }] })
+      setOpenId(id)
     } else {
-      update({
-        ...state!,
-        collections: state!.collections.map((c) => (c.id === picker.id ? { ...c, ...setFields } : c)),
-      })
+      patchCollection(picker.id, setFields)
     }
     setPicker(null)
+  }
+
+  function patchCollection(id: string, patch: Partial<Collection>) {
+    updateWith((s) => ({ ...s, collections: s.collections.map((c) => (c.id === id ? { ...c, ...patch } : c)) }))
   }
 
   function deleteCollection(id: string) {
     if (!confirm('Delete this collection and all its cards?')) return
     update({
+      ...state!,
       collections: state!.collections.filter((c) => c.id !== id),
       cards: state!.cards.filter((c) => c.collectionId !== id),
     })
@@ -93,21 +141,21 @@ export default function App() {
   }
 
   function addCard(card: OwnedCard) {
-    // Same card already in this collection? Bump quantity instead of duplicating.
-    const dupe = state!.cards.find((c) => c.collectionId === card.collectionId && c.cardId === card.cardId)
-    if (dupe) {
-      update({ ...state!, cards: state!.cards.map((c) => (c.id === dupe.id ? { ...c, qty: c.qty + 1 } : c)) })
-    } else {
-      update({ ...state!, cards: [...state!.cards, card] })
-    }
+    updateWith((s) => {
+      // Same card already in this collection? Bump quantity instead of duplicating.
+      const dupe = s.cards.find((c) => c.collectionId === card.collectionId && c.cardId === card.cardId)
+      return dupe
+        ? { ...s, cards: s.cards.map((c) => (c.id === dupe.id ? { ...c, qty: c.qty + 1 } : c)) }
+        : { ...s, cards: [...s.cards, card] }
+    })
   }
 
   function changeQty(id: string, delta: number) {
-    const cards = state!.cards
-      .map((c) => (c.id === id ? { ...c, qty: c.qty + delta } : c))
-      .filter((c) => c.qty > 0)
-    update({ ...state!, cards })
-    if (!cards.some((c) => c.id === id)) setDetailId(null)
+    update({
+      ...state!,
+      cards: state!.cards.map((c) => (c.id === id ? { ...c, qty: c.qty + delta } : c)).filter((c) => c.qty > 0),
+    })
+    if (delta < 0 && state!.cards.find((c) => c.id === id)?.qty === 1) setDetailId(null)
   }
 
   function removeCard(id: string) {
@@ -120,10 +168,17 @@ export default function App() {
     if (!file) return
     try {
       const data = await parseImport(file)
-      if (confirm(`Replace current data with ${data.cards.length} cards from this backup?`)) update(data)
+      if (confirm(`Replace current data with ${data.cards.length} cards from this backup?`)) {
+        update({ ...data, history: data.history })
+      }
     } catch (e) {
       alert(e instanceof Error ? e.message : 'Import failed')
     }
+  }
+
+  function startScan() {
+    if (!state!.collections.length) newCollection()
+    else setAdding(true)
   }
 
   const defaultCol = openId ?? state.collections[0]?.id ?? ''
@@ -143,19 +198,18 @@ export default function App() {
         />
       )}
       {bulk && state.collections.length > 0 && (
-        <BulkScan
-          collections={state.collections}
-          defaultCollectionId={defaultCol}
-          onAdd={addCard}
-          onClose={() => setBulk(false)}
-        />
+        <BulkScan collections={state.collections} defaultCollectionId={defaultCol} onAdd={addCard} onClose={() => setBulk(false)} />
       )}
       {picker && (
         <SetPicker
           title={picker.mode === 'new' ? 'Limit to a set?' : 'Collection set'}
           currentId={picker.mode === 'edit' ? state.collections.find((c) => c.id === picker.id)?.setId : undefined}
           onPick={applySet}
-          onCancel={() => setPicker(null)}
+          onCancel={() => {
+            // Cancelling while creating still creates the collection, just without a set.
+            if (picker.mode === 'new') applySet(null)
+            else setPicker(null)
+          }}
         />
       )}
       {detail && (
@@ -184,161 +238,91 @@ export default function App() {
     </>
   )
 
-  const addButton = state.collections.length > 0 && (
-    <button className="fab" onClick={() => setAdding(true)}>
-      <span style={{ fontSize: 22, lineHeight: 1 }}>＋</span> Add cards
-    </button>
-  )
-
-  if (open) {
-    const q = filter.trim().toLowerCase()
-    const cards = state.cards
-      .filter((c) => c.collectionId === open.id)
-      .filter((c) => !q || `${c.name} ${c.setName}`.toLowerCase().includes(q))
-      .sort((a, b) => a.setName.localeCompare(b.setName) || a.name.localeCompare(b.name))
-    const t = totals.get(open.id)
-    const unique = t?.unique.size ?? 0
-    const pct = open.setTotal ? Math.min(100, Math.round((unique / open.setTotal) * 100)) : 0
-
-    return (
-      <div className="app">
-        <header className="topbar slim">
-          <button className="icon-btn" onClick={() => { setOpenId(null); setFilter('') }} aria-label="Back">‹</button>
-          <h1>{open.name}</h1>
-          <span style={{ width: 44 }} />
-        </header>
-
-        <div style={{ textAlign: 'center' }}>
-          <button className="setpill" onClick={() => setPicker({ mode: 'edit', id: open.id })}>
-            {open.setName ?? 'Any set'} <small>Change ›</small>
-          </button>
-        </div>
-
-        <div className="stats">
-          <div className="stat"><b>{t?.count ?? 0}</b><span>Cards</span></div>
-          <div className="stat"><b>{unique}</b><span>Unique</span></div>
-          <div className="stat value"><b>{money(t?.value ?? 0)}</b><span>Value</span></div>
-        </div>
-
-        {open.setTotal ? (
-          <div className="progress-row">
-            <div className="progress"><i style={{ width: `${pct}%` }} /></div>
-            <span>{unique}/{open.setTotal} · {pct}%</span>
+  let body: React.ReactNode
+  if (tab === 'settings') {
+    body = (
+      <Settings
+        state={state}
+        refreshing={refreshing}
+        refreshNote={refreshNote}
+        onRefresh={() => runRefresh(true)}
+        onExport={() => exportJson(state)}
+        onImport={onImport}
+      />
+    )
+  } else if (tab === 'collections' && open) {
+    body = (
+      <CollectionView
+        key={open.id}
+        collection={open}
+        owned={state.cards.filter((c) => c.collectionId === open.id)}
+        onBack={() => setOpenId(null)}
+        onChangeSet={() => setPicker({ mode: 'edit', id: open.id })}
+        onCard={setDetailId}
+        onQty={changeQty}
+        onCollect={(c: TcgCard) => addCard(toOwned(c, open.id))}
+        onPatch={(p) => patchCollection(open.id, p)}
+        onDelete={() => deleteCollection(open.id)}
+      />
+    )
+  } else if (tab === 'collections') {
+    body = (
+      <>
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">Your sets &amp; binders</p>
+            <h1>Collections</h1>
           </div>
-        ) : null}
-
-        {state.cards.some((c) => c.collectionId === open.id) && (
-          <input
-            className="search"
-            placeholder="Search this collection"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-          />
-        )}
-
-        {cards.length === 0 ? (
+          <button className="icon-btn accent" onClick={newCollection} aria-label="New collection"><PlusIcon /></button>
+        </header>
+        {state.collections.length === 0 ? (
           <div className="empty">
-            <Pokeball />
-            <b>{filter ? 'No matches' : 'No cards yet'}</b>
-            {filter ? 'Try a different search.' : 'Tap Add cards to scan your first one.'}
+            <b>No collections yet</b>
+            Tap + to make one, like "Base Set" or "My Binder".
           </div>
         ) : (
-          <div className="grid">
-            {cards.map((c) => (
-              <button className="ctile" key={c.id} onClick={() => setDetailId(c.id)}>
-                <img src={c.image} alt={c.name} loading="lazy" />
-                {c.price != null && <span className="price">{money(c.price)}</span>}
-                {c.qty > 1 && <span className="qty">×{c.qty}</span>}
-                <span className="name">{c.name}</span>
-                <span className="num">#{c.number}</span>
-              </button>
-            ))}
+          <div className="tiles">
+            {state.collections.map((c) => {
+              const t = totals.get(c.id)
+              const thumbs = state.cards.filter((x) => x.collectionId === c.id).slice(0, 3)
+              const unique = t?.unique.size ?? 0
+              const pct = c.setTotal ? Math.min(100, Math.round((unique / c.setTotal) * 100)) : 0
+              return (
+                <button className="tile" key={c.id} onClick={() => setOpenId(c.id)}>
+                  <div className="fan">
+                    {thumbs.length ? thumbs.map((x) => <img key={x.id} src={x.image} alt="" />) : <div className="ghost">＋</div>}
+                  </div>
+                  <strong>{c.name}</strong>
+                  <span className="sub">{t?.count ?? 0} cards{c.setName ? ` · ${c.setName}` : ''}</span>
+                  <span className="sub gold">{money(t?.value ?? 0)}</span>
+                  {c.setTotal ? (
+                    <>
+                      <div className="progress"><i style={{ width: `${pct}%` }} /></div>
+                      <span className="sub">{unique}/{c.setTotal} · {pct}%</span>
+                    </>
+                  ) : null}
+                </button>
+              )
+            })}
           </div>
         )}
-
-        <div className="footer">
-          <button className="danger-link" onClick={() => deleteCollection(open.id)}>Delete collection</button>
-        </div>
-        {addButton}
-        {sheets}
-      </div>
+      </>
     )
+  } else {
+    body = <Home state={state} onCard={setDetailId} onStart={newCollection} />
   }
-
-  const totalCount = [...totals.values()].reduce((s, t) => s + t.count, 0)
-  const totalValue = [...totals.values()].reduce((s, t) => s + t.value, 0)
-  const totalUnique = [...totals.values()].reduce((s, t) => s + t.unique.size, 0)
 
   return (
     <div className="app">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Pokémon TCG</p>
-          <h1>CardVault</h1>
-        </div>
-        <button className="icon-btn accent" onClick={newCollection} aria-label="New collection">＋</button>
-      </header>
-
-      <div className="stats">
-        <div className="stat"><b>{totalCount}</b><span>Cards</span></div>
-        <div className="stat"><b>{totalUnique}</b><span>Unique</span></div>
-        <div className="stat value"><b>{money(totalValue)}</b><span>Value</span></div>
-      </div>
-
-      <h2 className="section">Collections</h2>
-      {state.collections.length === 0 ? (
-        <div className="empty">
-          <Pokeball />
-          <b>Start your first collection</b>
-          Tap ＋ to create one, then scan cards straight into it.
-        </div>
-      ) : (
-        <div className="tiles">
-          {state.collections.map((c: Collection) => {
-            const t = totals.get(c.id)
-            const thumbs = state.cards.filter((x) => x.collectionId === c.id).slice(0, 3)
-            const unique = t?.unique.size ?? 0
-            const pct = c.setTotal ? Math.min(100, Math.round((unique / c.setTotal) * 100)) : 0
-            return (
-              <button className="tile" key={c.id} onClick={() => setOpenId(c.id)}>
-                <div className="fan">
-                  {thumbs.length ? thumbs.map((x) => <img key={x.id} src={x.image} alt="" />) : <div className="ghost">＋</div>}
-                </div>
-                <strong>{c.name}</strong>
-                <span className="sub">{t?.count ?? 0} cards{c.setName ? ` · ${c.setName}` : ''}</span>
-                <span className="sub gold">{money(t?.value ?? 0)}</span>
-                {c.setTotal ? (
-                  <>
-                    <div className="progress"><i style={{ width: `${pct}%` }} /></div>
-                    <span className="sub">{unique}/{c.setTotal} · {pct}%</span>
-                  </>
-                ) : null}
-              </button>
-            )
-          })}
-          <button className="tile new" onClick={newCollection}>＋ New collection</button>
-        </div>
-      )}
-
-      <div className="footer">
-        <div className="row">
-          <button className="ghost" onClick={() => exportJson(state)}>Export backup</button>
-          <button className="ghost" onClick={() => importRef.current?.click()}>Import backup</button>
-          <input
-            ref={importRef}
-            type="file"
-            accept="application/json"
-            hidden
-            onChange={(e) => {
-              onImport(e.target.files?.[0])
-              e.target.value = ''
-            }}
-          />
-        </div>
-        <small>Version {__BUILD__} UTC</small>
-      </div>
-
-      {addButton}
+      {body}
+      <BottomNav
+        tab={tab}
+        onTab={(t) => {
+          if (t === tab && t === 'collections') setOpenId(null)
+          setTab(t)
+        }}
+        onScan={startScan}
+      />
       {sheets}
     </div>
   )

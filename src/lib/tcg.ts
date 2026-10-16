@@ -4,15 +4,23 @@ import type { OwnedCard, TcgCard } from './types'
 
 const API = 'https://api.pokemontcg.io/v2/cards'
 
-const FIELDS = 'id,name,number,rarity,set,images,tcgplayer'
+export const FIELDS = 'id,name,number,rarity,set,images,tcgplayer'
 const cache = new Map<string, TcgCard[]>()
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 /** The free card API returns occasional 500/502/504s, so retry those with a short backoff. */
-async function query(q: string): Promise<TcgCard[]> {
-  const hit = cache.get(q)
+export interface QueryOpts {
+  pageSize?: number
+  page?: number
+  orderBy?: string
+}
+
+export async function queryCards(q: string, opts: QueryOpts = {}): Promise<TcgCard[]> {
+  const { pageSize = 36, page = 1, orderBy = '-set.releaseDate' } = opts
+  const key = `${q}|${pageSize}|${page}|${orderBy}`
+  const hit = cache.get(key)
   if (hit) return hit
-  const url = `${API}?q=${encodeURIComponent(q)}&pageSize=36&orderBy=-set.releaseDate&select=${FIELDS}`
+  const url = `${API}?q=${encodeURIComponent(q)}&pageSize=${pageSize}&page=${page}&orderBy=${orderBy}&select=${FIELDS}`
   let lastStatus = 0
   for (let attempt = 0; attempt < 5; attempt++) {
     if (attempt) await sleep(500 * 2 ** (attempt - 1))
@@ -20,7 +28,7 @@ async function query(q: string): Promise<TcgCard[]> {
       const res = await fetch(url, { signal: AbortSignal.timeout(15000) })
       if (res.ok) {
         const data = ((await res.json()).data ?? []) as TcgCard[]
-        cache.set(q, data)
+        cache.set(key, data)
         return data
       }
       lastStatus = res.status
@@ -58,7 +66,7 @@ export async function findCards(
     if (num) attempts.push(`number:${num} ${inSet}`)
     if (n) attempts.push(`name:"${n}*" ${inSet}`)
     for (const q of attempts) {
-      const found = await query(q)
+      const found = await queryCards(q)
       if (found.length) return rankByName(found, n)
     }
     return [] // never fall back to cards outside the chosen set
@@ -67,7 +75,7 @@ export async function findCards(
   // A number plus printed set total (e.g. 4/102) pins down one card per set, so trust it over a
   // possibly misread name and only use the name to rank the results.
   if (num && tot && !trustName) {
-    const found = await query(`number:${num} set.printedTotal:${tot}`)
+    const found = await queryCards(`number:${num} set.printedTotal:${tot}`)
     if (found.length) return rankByName(found, n)
   }
 
@@ -77,7 +85,7 @@ export async function findCards(
   if (!n && num) attempts.push(`number:${num}`)
 
   for (const q of attempts) {
-    const found = await query(q)
+    const found = await queryCards(q)
     if (found.length) {
       // The printed total can be misread, so use it only to float matching sets to the top.
       if (tot) {
