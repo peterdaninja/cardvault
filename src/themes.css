@@ -1,0 +1,120 @@
+/* Themes: chosen in Settings, applied as <html data-theme="…">. No attribute = follow the phone. */
+
+:root[data-theme='midnight'] {
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f2f3f7;
+  --bg-glow: rgba(255, 77, 46, 0.1);
+  --surface: #ffffff;
+  --surface-2: #f0f2f7;
+  --line: #e1e4ec;
+  --text: #12151c;
+  --muted: #667088;
+  --gold: #b9830a;
+  --good: #12935f;
+  --danger: #d6293b;
+  --shadow: 0 10px 30px rgba(20, 28, 50, 0.12);
+}
+
+/* Navy and yellow, matching the logo. */
+:root[data-theme='electric'] {
+  color-scheme: dark;
+  --bg: #060b1f;
+  --bg-glow: rgba(61, 104, 224, 0.34);
+  --surface: #0e1736;
+  --surface-2: #162250;
+  --line: #27387a;
+  --text: #f1f5ff;
+  --muted: #8d9bd0;
+  --accent: #ffcb05;
+  --accent-2: #ffe066;
+  --on-accent: #14245f;
+  --gold: #ffd84d;
+  --good: #4ade80;
+  --action: #3d68e0;
+  --bar-a: #ffcb05;
+  --bar-b: #ffe066;
+}
+
+/* Purple to pink. */
+:root[data-theme='holo'] {
+  color-scheme: dark;
+  --bg: #0d0716;
+  --bg-glow: rgba(166, 77, 255, 0.26);
+  --surface: #171026;
+  --surface-2: #221538;
+  --line: #36234f;
+  --text: #f6f1ff;
+  --muted: #a08fc0;
+  --accent: #a64dff;
+  --accent-2: #ff4fa3;
+  --on-accent: #ffffff;
+  --gold: #ffd166;
+  --good: #5eead4;
+  --action: #7a5cff;
+  --bar-a: #a64dff;
+  --bar-b: #ff4fa3;
+}
+
+/* Deep green with lime. */
+:root[data-theme='forest'] {
+  color-scheme: dark;
+  --bg: #07110c;
+  --bg-glow: rgba(52, 199, 111, 0.2);
+  --surface: #0e1b14;
+  --surface-2: #15281d;
+  --line: #223b2c;
+  --text: #eef8f1;
+  --muted: #86a695;
+  --accent: #34c76f;
+  --accent-2: #b6e34a;
+  --on-accent: #06130b;
+  --gold: #f2d15c;
+  --good: #7ee787;
+  --action: #2f9e5f;
+  --bar-a: #34c76f;
+  --bar-b: #b6e34a;
+}
+
+/* Theme picker in Settings */
+.themes {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+.theme-opt {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: stretch;
+  padding: 12px;
+  text-align: left;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 2px solid var(--line);
+}
+.theme-opt.on {
+  border-color: var(--accent-2);
+}
+.theme-opt .swatch {
+  display: flex;
+  height: 38px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+.theme-opt .swatch i {
+  flex: 1;
+}
+.theme-opt b {
+  font-size: 14px;
+}
+.theme-opt small {
+  display: block;
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 12px;
+}

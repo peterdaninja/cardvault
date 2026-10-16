@@ -1,4 +1,5 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
+import { THEMES, applyTheme, getTheme } from '../lib/theme'
 import type { AppState } from '../lib/types'
 import { dateLabel } from '../ui/format'
 import Logo from '../ui/Logo'
@@ -16,9 +17,33 @@ interface Props {
 
 export default function Settings({ state, refreshing, refreshNote, onRefresh, onExport, onImport }: Props) {
   const importRef = useRef<HTMLInputElement>(null)
+  const [theme, setTheme] = useState(getTheme())
   return (
     <>
       <header className="brand"><Logo height={44} /></header>
+      <h2 className="section">Appearance</h2>
+      <div className="themes">
+        {THEMES.map((t) => (
+          <button
+            key={t.key}
+            className={`theme-opt ${t.key === theme ? 'on' : ''}`}
+            onClick={() => {
+              applyTheme(t.key)
+              setTheme(t.key)
+            }}
+            aria-pressed={t.key === theme}
+          >
+            <span className="swatch">
+              {t.swatch.map((c) => <i key={c} style={{ background: c }} />)}
+            </span>
+            <span>
+              <b>{t.label}{t.key === theme ? ' ✓' : ''}</b>
+              <small>{t.blurb}</small>
+            </span>
+          </button>
+        ))}
+      </div>
+
       <h2 className="section">Prices</h2>
       <div className="card-panel">
         <p>

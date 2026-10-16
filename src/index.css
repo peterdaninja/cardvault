@@ -16,6 +16,9 @@
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
   --radius: 18px;
   --radius-sm: 12px;
+  --action: #4a5cff;
+  --bar-a: #b6e34a;
+  --bar-b: #d9f26a;
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
   font-synthesis: none;
   -webkit-font-smoothing: antialiased;
@@ -24,7 +27,7 @@
 }
 
 @media (prefers-color-scheme: light) {
-  :root {
+  :root:not([data-theme]) {
     color-scheme: light;
     --bg: #f2f3f7;
     --bg-glow: rgba(255, 77, 46, 0.1);
