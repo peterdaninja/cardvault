@@ -3,12 +3,36 @@ import type { TcgCard } from './types'
 
 const API = 'https://api.pokemontcg.io/v2/cards'
 
+const FIELDS = 'id,name,number,rarity,set,images,tcgplayer'
+const cache = new Map<string, TcgCard[]>()
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+/** The free card API returns occasional 500/502/504s, so retry those with a short backoff. */
 async function query(q: string): Promise<TcgCard[]> {
-  const url = `${API}?q=${encodeURIComponent(q)}&pageSize=36&orderBy=-set.releaseDate`
-  const res = await fetch(url)
-  if (!res.ok) throw new Error(`Card lookup failed (${res.status})`)
-  const json = await res.json()
-  return json.data as TcgCard[]
+  const hit = cache.get(q)
+  if (hit) return hit
+  const url = `${API}?q=${encodeURIComponent(q)}&pageSize=36&orderBy=-set.releaseDate&select=${FIELDS}`
+  let lastStatus = 0
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (attempt) await sleep(500 * 2 ** (attempt - 1))
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(15000) })
+      if (res.ok) {
+        const data = ((await res.json()).data ?? []) as TcgCard[]
+        cache.set(q, data)
+        return data
+      }
+      lastStatus = res.status
+      if (res.status < 500 && res.status !== 429) break // a real client error, retrying won't help
+    } catch {
+      lastStatus = 0 // network error or timeout
+    }
+  }
+  throw new Error(
+    lastStatus
+      ? `The card database is busy right now (error ${lastStatus}). Tap Search to try again.`
+      : 'Could not reach the card database. Check your connection and tap Search to try again.',
+  )
 }
 
 const clean = (s: string) => s.replace(/["\\]/g, '').trim()
