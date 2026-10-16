@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
-import { scanCard } from './lib/ocr'
+import Camera from './Camera'
+import { fileToCanvas, scanCanvas } from './lib/ocr'
 import { findCards, marketPrice } from './lib/tcg'
 import type { Collection, OwnedCard, TcgCard } from './lib/types'
 import { uid } from './lib/store'
@@ -16,16 +17,19 @@ export default function AddCard({ collections, defaultCollectionId, onAdd, onClo
   const [collectionId, setCollectionId] = useState(defaultCollectionId)
   const [name, setName] = useState('')
   const [number, setNumber] = useState('')
+  const [total, setTotal] = useState('')
+  const [camera, setCamera] = useState(false)
+  const [lastRead, setLastRead] = useState('')
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [results, setResults] = useState<TcgCard[]>([])
   const [added, setAdded] = useState<string[]>([])
 
-  async function search(n = name, num = number) {
+  async function search(n = name, num = number, tot = total) {
     setError('')
     setBusy('Searching…')
     try {
-      const found = await findCards(n, num)
+      const found = await findCards(n, num, tot)
       setResults(found)
       if (!found.length) setError('No matches. Edit the name or number and search again.')
     } catch (e) {
@@ -35,24 +39,31 @@ export default function AddCard({ collections, defaultCollectionId, onAdd, onClo
     }
   }
 
-  async function onPhoto(file: File | undefined) {
-    if (!file) return
+  async function scan(getCanvas: () => Promise<HTMLCanvasElement> | HTMLCanvasElement) {
     setError('')
     setResults([])
+    setLastRead('')
     try {
-      const scan = await scanCard(file, setBusy)
-      setName(scan.name)
-      setNumber(scan.number)
-      if (!scan.name && !scan.number) {
+      setBusy('Preparing photo…')
+      const scanned = await scanCanvas(await getCanvas(), setBusy)
+      setName(scanned.name)
+      setNumber(scanned.number)
+      setTotal(scanned.total)
+      setLastRead(scanned.rawText)
+      if (!scanned.name && !scanned.number) {
         setBusy('')
-        setError('Could not read the card. Try a brighter, flatter photo, or type the name.')
+        setError('Could not read the card. Try again with less glare, or type the name.')
         return
       }
-      await search(scan.name, scan.number)
+      await search(scanned.name, scanned.number, scanned.total)
     } catch (e) {
       setBusy('')
       setError(e instanceof Error ? e.message : 'Scan failed')
     }
+  }
+
+  function onPhoto(file: File | undefined) {
+    if (file) scan(() => fileToCanvas(file))
   }
 
   function add(c: TcgCard) {
@@ -74,6 +85,15 @@ export default function AddCard({ collections, defaultCollectionId, onAdd, onClo
 
   return (
     <div className="sheet">
+      {camera && (
+        <Camera
+          onCancel={() => setCamera(false)}
+          onCapture={(c) => {
+            setCamera(false)
+            scan(() => c)
+          }}
+        />
+      )}
       <header className="bar">
         <button className="link" onClick={onClose}>Done</button>
         <h2>Add card</h2>
@@ -94,15 +114,17 @@ export default function AddCard({ collections, defaultCollectionId, onAdd, onClo
           ref={fileRef}
           type="file"
           accept="image/*"
-          capture="environment"
-          hidden
+                    hidden
           onChange={(e) => {
             onPhoto(e.target.files?.[0])
             e.target.value = ''
           }}
         />
-        <button className="primary big" disabled={!!busy} onClick={() => fileRef.current?.click()}>
+        <button className="primary big" disabled={!!busy} onClick={() => setCamera(true)}>
           📷 Scan a card
+        </button>
+        <button className="link" disabled={!!busy} onClick={() => fileRef.current?.click()}>
+          Choose photo instead
         </button>
         <p className="hint">Fill the frame with one card, flat and well lit.</p>
 
@@ -116,7 +138,10 @@ export default function AddCard({ collections, defaultCollectionId, onAdd, onClo
             <input
               value={number}
               inputMode="numeric"
-              onChange={(e) => setNumber(e.target.value)}
+              onChange={(e) => {
+                setNumber(e.target.value)
+                setTotal('')
+              }}
               placeholder="25"
             />
           </label>
@@ -124,6 +149,7 @@ export default function AddCard({ collections, defaultCollectionId, onAdd, onClo
         <button disabled={!!busy || (!name && !number)} onClick={() => search()}>Search</button>
 
         {busy && <p className="status">{busy}</p>}
+        {lastRead && <p className="hint">Read: {lastRead}</p>}
         {error && <p className="error">{error}</p>}
 
         <ul className="results">

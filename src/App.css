@@ -43,3 +43,11 @@ button:disabled { opacity: .5; }
 .meta { flex: 1; display: flex; flex-direction: column; font-size: 13px; color: var(--muted); }
 .meta strong { color: var(--text); font-size: 15px; }
 .backup { margin-top: 28px; justify-content: center; }
+.camera { position: fixed; inset: 0; z-index: 30; background: #000; display: flex; align-items: center; justify-content: center; }
+.camera video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.guide { position: relative; height: 68%; max-width: 92%; border: 3px solid #fff; border-radius: 14px; box-shadow: 0 0 0 100vmax #0009; }
+.camera-hint { position: absolute; top: calc(env(safe-area-inset-top) + 16px); left: 0; right: 0; margin: 0; text-align: center; color: #fff; font-size: 14px; padding: 0 24px; text-shadow: 0 1px 4px #000; }
+.camera-actions { position: absolute; bottom: calc(env(safe-area-inset-bottom) + 24px); left: 0; right: 0; display: flex; justify-content: space-around; align-items: center; }
+.camera-actions button:not(.shutter) { background: #0006; color: #fff; border-color: #fff4; }
+.shutter { width: 72px; height: 72px; border-radius: 50%; background: #fff; border: 5px solid #fff6; background-clip: padding-box; }
+.camera-actions span { width: 72px; }
