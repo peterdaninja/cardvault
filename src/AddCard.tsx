@@ -1,7 +1,9 @@
 import { useRef, useState } from 'react'
 import Camera from './Camera'
 import { toOwned, type CatalogCard } from './lib/catalog'
+import { confidentMatch } from './lib/confidence'
 import { adapterFor } from './lib/games'
+import { getAutoAdd } from './lib/prefs'
 import { fileToCanvas } from './lib/ocr'
 import { scanFor } from './lib/scan'
 import type { Collection, OwnedCard } from './lib/types'
@@ -13,9 +15,11 @@ interface Props {
   onAdd: (card: OwnedCard) => void
   onClose: () => void
   onBulk: () => void
+  /** Take back one copy of a card that was just added (used by Undo after an automatic add). */
+  onUndo: (card: CatalogCard, collectionId: string) => void
 }
 
-export default function AddCard({ collections, defaultCollectionId, onAdd, onClose, onBulk }: Props) {
+export default function AddCard({ collections, defaultCollectionId, onAdd, onClose, onBulk, onUndo }: Props) {
   const fileRef = useRef<HTMLInputElement>(null)
   const [collectionId, setCollectionId] = useState(defaultCollectionId)
   const collection = collections.find((c) => c.id === collectionId)
@@ -30,6 +34,7 @@ export default function AddCard({ collections, defaultCollectionId, onAdd, onClo
   const [error, setError] = useState('')
   const [results, setResults] = useState<CatalogCard[]>([])
   const [added, setAdded] = useState<string[]>([])
+  const [auto, setAuto] = useState<{ card: CatalogCard; collectionId: string } | null>(null)
 
   function pickCollection(id: string) {
     setCollectionId(id)
@@ -39,8 +44,9 @@ export default function AddCard({ collections, defaultCollectionId, onAdd, onClo
     setLastRead('')
   }
 
-  async function search(n = name, num = number, tot = total, trust = trustName) {
+  async function search(n = name, num = number, tot = total, trust = trustName): Promise<CatalogCard[]> {
     setError('')
+    setAuto(null)
     setBusy('Searching…')
     try {
       const found = await adapter.findCards({ name: n, number: num, total: tot, trustName: trust, setId: collection?.setId })
@@ -52,8 +58,10 @@ export default function AddCard({ collections, defaultCollectionId, onAdd, onClo
             : `No matches. Edit the name or ${adapter.numberLabel.toLowerCase()} and search again.`,
         )
       }
+      return found
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Search failed')
+      return []
     } finally {
       setBusy('')
     }
@@ -76,7 +84,14 @@ export default function AddCard({ collections, defaultCollectionId, onAdd, onClo
         setError('Could not read the card. Try again with less glare, or type the name.')
         return
       }
-      await search(scanned.name, scanned.number, scanned.total, scanned.nameConfident)
+      const found = await search(scanned.name, scanned.number, scanned.total, scanned.nameConfident)
+      // One clear match: add it without making the person tap, and offer Undo.
+      const pick = getAutoAdd() ? confidentMatch(found, adapter.key, scanned, !!collection?.setId) : null
+      if (pick) {
+        add(pick)
+        setAuto({ card: pick, collectionId })
+        setResults([])
+      }
     } catch (e) {
       setBusy('')
       setError(e instanceof Error ? e.message : 'Scan failed')
@@ -173,6 +188,24 @@ export default function AddCard({ collections, defaultCollectionId, onAdd, onClo
         </div>
         <button disabled={!!busy || (!name && !number)} onClick={() => search()}>Search</button>
 
+        {auto && (
+          <div className="autoadd">
+            <div>
+              <b>Added {auto.card.name}</b>
+              <span>{auto.card.setName} · #{auto.card.number}{auto.card.price != null ? ` · ${money(auto.card.price)}` : ''}</span>
+            </div>
+            <button
+              onClick={() => {
+                onUndo(auto.card, auto.collectionId)
+                setAdded((a) => a.filter((id, i) => !(id === auto.card.id && i === a.lastIndexOf(id))))
+                setAuto(null)
+              }}
+            >
+              Undo
+            </button>
+            <button className="primary" onClick={() => { setAuto(null); setCamera(true) }}>Scan next</button>
+          </div>
+        )}
         {busy && <p className="status">{busy}</p>}
         {lastRead && <p className="hint">Read: {lastRead}</p>}
         {error && <p className="error">{error}</p>}

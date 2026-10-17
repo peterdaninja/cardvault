@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { getAutoAdd, setAutoAdd } from '../lib/prefs'
 import { THEMES, applyTheme, getTheme } from '../lib/theme'
 import type { AppState } from '../lib/types'
 import { dateLabel } from '../ui/format'
@@ -19,6 +20,7 @@ interface Props {
 export default function Settings({ state, refreshing, refreshNote, onRefresh, onExport, onImport, onImportList }: Props) {
   const importRef = useRef<HTMLInputElement>(null)
   const [theme, setTheme] = useState(getTheme())
+  const [autoAdd, setAutoAddState] = useState(getAutoAdd())
   return (
     <>
       <header className="brand"><Logo height={44} /></header>
@@ -44,6 +46,22 @@ export default function Settings({ state, refreshing, refreshNote, onRefresh, on
           </button>
         ))}
       </div>
+
+      <h2 className="section">Scanning</h2>
+      <label className="card-panel toggle">
+        <span>
+          <b>Add automatically when sure</b>
+          <small>After a scan, a clear single match is added right away, with an Undo. Anything unclear still asks you to choose.</small>
+        </span>
+        <input
+          type="checkbox"
+          checked={autoAdd}
+          onChange={(e) => {
+            setAutoAdd(e.target.checked)
+            setAutoAddState(e.target.checked)
+          }}
+        />
+      </label>
 
       <h2 className="section">Prices</h2>
       <div className="card-panel">

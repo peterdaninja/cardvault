@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { beep, cropGuide, guideSignature, sigDiff } from './lib/frame'
-import { levenshtein, norm } from './lib/names'
 import { toOwned, type CatalogCard } from './lib/catalog'
 import { adapterFor } from './lib/games'
 import { CAMERA_CONSTRAINTS, keepFocused, ZONES } from './lib/zones'
-import { scanFor, type ScanResult } from './lib/scan'
+import { confidentMatch } from './lib/confidence'
+import { scanFor } from './lib/scan'
 import { money } from './ui/format'
 import type { Collection, Game, OwnedCard } from './lib/types'
 
@@ -355,46 +355,6 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
       </div>
     </div>
   )
-}
-
-const nameSim = (x: string, y: string) => {
-  const a = norm(x)
-  const b = norm(y)
-  return a && b ? 1 - levenshtein(a, b) / Math.max(a.length, b.length) : 0
-}
-
-/**
- * Auto-add only when the match is clear; anything less goes to the review list.
- *  - Pokémon: a confidently read name plus number that leads to exactly one card, or to one card
- *    whose set total agrees with the printed total. In a set-locked collection a number is unique.
- *  - Yu-Gi-Oh!: the set code must match a printing exactly, and the name must roughly agree.
- */
-function confidentMatch(
-  results: CatalogCard[],
-  game: Game,
-  scan: ScanResult,
-  setLocked: boolean,
-): CatalogCard | null {
-  if (!results.length) return null
-
-  if (game === 'yugioh') {
-    const r = results[0]
-    if (!scan.number || r.number.toUpperCase() !== scan.number.toUpperCase()) return null
-    const s = nameSim(scan.name, r.name)
-    if (scan.name.length >= 4 && s < 0.5) return null // the code and the name disagree
-    return scan.nameConfident || s >= 0.6 ? r : null
-  }
-
-  if (setLocked && !!scan.number && results.length === 1) {
-    if (scan.nameConfident || nameSim(scan.name, results[0].name) >= 0.6) return results[0]
-  }
-  if (!(scan.nameConfident && !!scan.number)) return null
-  if (results.length === 1) return results[0]
-  if (scan.total) {
-    const sameTotal = results.filter((c) => String(c.setPrintedTotal) === scan.total)
-    if (sameTotal.length === 1) return sameTotal[0]
-  }
-  return null
 }
 
 function makeThumb(card: HTMLCanvasElement): string {

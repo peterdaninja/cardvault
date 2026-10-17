@@ -185,6 +185,18 @@ export default function App() {
     return id
   }
 
+  /** Take back one copy of a card in a collection (Undo after an automatic add). */
+  function undoAdd(card: CatalogCard, collectionId: string) {
+    updateWith((s) => ({
+      ...s,
+      cards: s.cards
+        .map((c) =>
+          c.collectionId === collectionId && c.cardId === card.id && (c.game ?? 'pokemon') === card.game ? { ...c, qty: c.qty - 1 } : c,
+        )
+        .filter((c) => c.qty > 0),
+    }))
+  }
+
   function changeQty(id: string, delta: number) {
     update({
       ...state!,
@@ -225,6 +237,7 @@ export default function App() {
           collections={state.collections}
           defaultCollectionId={defaultCol}
           onAdd={addCard}
+          onUndo={undoAdd}
           onClose={() => setAdding(false)}
           onBulk={() => {
             setAdding(false)

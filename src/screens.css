@@ -448,6 +448,43 @@
   text-transform: uppercase;
 }
 
+/* Automatic add banner and settings toggle */
+.autoadd {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0 4px;
+  padding: 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--good);
+  background: color-mix(in srgb, var(--good) 12%, var(--surface));
+}
+.autoadd > div {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.autoadd b { font-size: 15px; }
+.autoadd span { font-size: 12px; color: var(--muted); }
+.autoadd button { flex: none; padding: 9px 12px; font-size: 13px; }
+
+.card-panel.toggle {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.card-panel.toggle span { flex: 1; }
+.card-panel.toggle b { display: block; font-size: 15px; }
+.card-panel.toggle small { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; line-height: 1.35; }
+.card-panel.toggle input {
+  width: 46px;
+  height: 28px;
+  flex: none;
+  accent-color: var(--accent);
+}
+
 /* Reading-zone markers on the camera guide */
 .zone {
   position: absolute;

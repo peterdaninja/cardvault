@@ -208,6 +208,6 @@ export async function scanCanvas(
     number,
     total,
     nameConfident: !!best && best.score >= 0.85,
-    rawText: `Name: ${squash(nameTexts[0])} | Number: ${squash(numTexts.filter(Boolean).join(' / ')).slice(0, 80)}`,
+    rawText: `Name: ${squash(nameTexts.find((t) => t.trim()) ?? "")} | Number: ${squash(numTexts.filter(Boolean).join(' / ')).slice(0, 80)}`,
   }
 }
