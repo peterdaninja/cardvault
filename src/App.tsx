@@ -4,20 +4,23 @@ import BulkScan from './BulkScan'
 import SetPicker from './SetPicker'
 import { withSnapshot } from './lib/history'
 import { refreshPrices } from './lib/prices'
-import type { TcgSet } from './lib/sets'
 import { exportJson, loadState, parseImport, saveState, uid } from './lib/store'
-import { toOwned } from './lib/tcg'
-import type { AppState, Collection, OwnedCard, TcgCard } from './lib/types'
+import { toOwned, type CatalogCard, type CatalogSet } from './lib/catalog'
+import { adapterFor } from './lib/games'
+import NewCollection from './NewCollection'
+import type { AppState, Collection, Game, OwnedCard } from './lib/types'
 import CollectionView from './screens/CollectionView'
 import Home from './screens/Home'
+import Import from './screens/Import'
 import Settings from './screens/Settings'
 import BottomNav, { type Tab } from './ui/BottomNav'
 import { money } from './ui/format'
 import { PlusIcon } from './ui/icons'
 import './App.css'
 import './screens.css'
+import './import.css'
 
-type PickerState = { mode: 'new'; name: string } | { mode: 'edit'; id: string } | null
+type PickerState = { mode: 'new'; name: string; game: Game } | { mode: 'edit'; id: string } | null
 
 const PRICE_REFRESH_MS = 20 * 60 * 60 * 1000
 
@@ -28,6 +31,8 @@ export default function App() {
   const [adding, setAdding] = useState(false)
   const [bulk, setBulk] = useState(false)
   const [picker, setPicker] = useState<PickerState>(null)
+  const [naming, setNaming] = useState(false)
+  const [importing, setImporting] = useState(false)
   const [detailId, setDetailId] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [refreshNote, setRefreshNote] = useState('')
@@ -66,6 +71,7 @@ export default function App() {
 
   function update(next: AppState) {
     const withHistory = withSnapshot(next)
+    latest.current = withHistory // so back-to-back updates in one handler build on each other
     setState(withHistory)
     saveState(withHistory)
   }
@@ -102,23 +108,21 @@ export default function App() {
   const detail = state.cards.find((c) => c.id === detailId)
 
   function newCollection() {
-    const name = prompt('Collection name (e.g. Base Set, Charizard, Binder 1)')?.trim()
-    if (!name) return
     setTab('collections')
-    setPicker({ mode: 'new', name }) // next: optionally limit it to one set
+    setNaming(true)
   }
 
-  function applySet(picked: TcgSet | null) {
+  function applySet(picked: CatalogSet | null) {
     if (!picker) return
     const setFields = {
       setId: picked?.id,
       setName: picked?.name,
-      setTotal: picked ? (picked.total ?? picked.printedTotal) : undefined,
+      setTotal: picked?.total,
       setLogo: picked?.logo,
     }
     if (picker.mode === 'new') {
       const id = uid()
-      update({ ...state!, collections: [...state!.collections, { id, name: picker.name, createdAt: Date.now(), ...setFields }] })
+      update({ ...state!, collections: [...state!.collections, { id, name: picker.name, game: picker.game, createdAt: Date.now(), ...setFields }] })
       setOpenId(id)
     } else {
       patchCollection(picker.id, setFields)
@@ -148,6 +152,37 @@ export default function App() {
         ? { ...s, cards: s.cards.map((c) => (c.id === dupe.id ? { ...c, qty: c.qty + 1 } : c)) }
         : { ...s, cards: [...s.cards, card] }
     })
+  }
+
+  /** Add many cards at once (used by the list importer). Existing copies just get their quantity raised. */
+  function addMany(rows: { card: CatalogCard; qty: number }[], collectionId: string) {
+    updateWith((s) => {
+      const cards = [...s.cards]
+      const index = new Map(cards.map((c, i) => [`${c.collectionId}|${c.game ?? 'pokemon'}|${c.cardId}`, i]))
+      for (const { card, qty } of rows) {
+        const key = `${collectionId}|${card.game}|${card.id}`
+        const at = index.get(key)
+        if (at != null) cards[at] = { ...cards[at], qty: cards[at].qty + qty }
+        else {
+          index.set(key, cards.length)
+          cards.push({ ...toOwned(card, collectionId), qty })
+        }
+      }
+      return { ...s, cards }
+    })
+  }
+
+  /** Make a collection from the importer, tied to a set when one is given. Returns its id right away. */
+  function createCollection(game: Game, setInfo: { id: string; name: string } | undefined, name: string): string {
+    const id = uid()
+    updateWith((s) => ({
+      ...s,
+      collections: [
+        ...s.collections,
+        { id, name, game, createdAt: Date.now(), ...(setInfo ? { setId: setInfo.id, setName: setInfo.name } : {}) },
+      ],
+    }))
+    return id
   }
 
   function changeQty(id: string, delta: number) {
@@ -200,8 +235,26 @@ export default function App() {
       {bulk && state.collections.length > 0 && (
         <BulkScan collections={state.collections} defaultCollectionId={defaultCol} onAdd={addCard} onClose={() => setBulk(false)} />
       )}
+      {importing && (
+        <Import
+          collections={state.collections}
+          onImport={addMany}
+          onCreateCollection={createCollection}
+          onClose={() => setImporting(false)}
+        />
+      )}
+      {naming && (
+        <NewCollection
+          onCancel={() => setNaming(false)}
+          onNext={(name, game) => {
+            setNaming(false)
+            setPicker({ mode: 'new', name, game })
+          }}
+        />
+      )}
       {picker && (
         <SetPicker
+          game={picker.mode === 'new' ? picker.game : adapterFor(state.collections.find((c) => c.id === picker.id)?.game).key}
           title={picker.mode === 'new' ? 'Limit to a set?' : 'Collection set'}
           currentId={picker.mode === 'edit' ? state.collections.find((c) => c.id === picker.id)?.setId : undefined}
           onPick={applySet}
@@ -248,6 +301,7 @@ export default function App() {
         onRefresh={() => runRefresh(true)}
         onExport={() => exportJson(state)}
         onImport={onImport}
+        onImportList={() => setImporting(true)}
       />
     )
   } else if (tab === 'collections' && open) {
@@ -260,7 +314,7 @@ export default function App() {
         onChangeSet={() => setPicker({ mode: 'edit', id: open.id })}
         onCard={setDetailId}
         onQty={changeQty}
-        onCollect={(c: TcgCard) => addCard(toOwned(c, open.id))}
+        onCollect={(c: CatalogCard) => addCard(toOwned(c, open.id))}
         onPatch={(p) => patchCollection(open.id, p)}
         onDelete={() => deleteCollection(open.id)}
       />
@@ -293,6 +347,7 @@ export default function App() {
                     {thumbs.length ? thumbs.map((x) => <img key={x.id} src={x.image} alt="" />) : <div className="ghost">＋</div>}
                   </div>
                   <strong>{c.name}</strong>
+                  <span className="badge">{adapterFor(c.game).label}</span>
                   <span className="sub">{t?.count ?? 0} cards{c.setName ? ` · ${c.setName}` : ''}</span>
                   <span className="sub gold">{money(t?.value ?? 0)}</span>
                   {c.setTotal ? (

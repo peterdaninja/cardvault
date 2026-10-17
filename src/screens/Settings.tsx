@@ -13,9 +13,10 @@ interface Props {
   onRefresh: () => void
   onExport: () => void
   onImport: (file: File | undefined) => void
+  onImportList: () => void
 }
 
-export default function Settings({ state, refreshing, refreshNote, onRefresh, onExport, onImport }: Props) {
+export default function Settings({ state, refreshing, refreshNote, onRefresh, onExport, onImport, onImportList }: Props) {
   const importRef = useRef<HTMLInputElement>(null)
   const [theme, setTheme] = useState(getTheme())
   return (
@@ -56,6 +57,12 @@ export default function Settings({ state, refreshing, refreshNote, onRefresh, on
         <button className="big" onClick={onRefresh} disabled={refreshing || !state.cards.length}>
           {refreshing ? 'Refreshing prices…' : 'Refresh prices now'}
         </button>
+      </div>
+
+      <h2 className="section">Import cards</h2>
+      <div className="card-panel">
+        <p>Add cards from a text list, like an export from another app. You preview the matches, tick what you want, and send them to your collections.</p>
+        <button className="big" style={{ marginTop: 12 }} onClick={onImportList}>Import a card list</button>
       </div>
 
       <h2 className="section">Backup</h2>

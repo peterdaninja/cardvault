@@ -1,4 +1,7 @@
+export type Game = 'pokemon' | 'yugioh'
+
 export interface Collection {
+  game?: Game // missing on older data, which is all Pokémon
   id: string
   name: string
   createdAt: number
@@ -20,6 +23,8 @@ export interface OwnedCard {
   price: number | null // USD market price, if known
   qty: number
   addedAt: number
+  game?: Game // missing on older cards, which are all Pokémon
+  setId?: string // set id within the game (derived from cardId on older cards)
 }
 
 /** One point on the collection-value chart. */

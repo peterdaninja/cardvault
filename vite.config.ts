@@ -31,6 +31,16 @@ export default defineConfig({
             handler: 'CacheFirst',
             options: { cacheName: 'card-images', expiration: { maxEntries: 600 } },
           },
+          {
+            // Cached after the first load so each card image is only requested from their server once.
+            urlPattern: /^https:\/\/images\.ygoprodeck\.com\/.*/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'ygo-images',
+              expiration: { maxEntries: 1500 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
         ],
       },
     }),

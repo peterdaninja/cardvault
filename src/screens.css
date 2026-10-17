@@ -415,6 +415,39 @@
   color: var(--muted);
 }
 
+/* ───────── Game badges and the new-collection sheet ───────── */
+.badge {
+  align-self: flex-start;
+  margin: 2px 0 4px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--accent-2);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.seg.wide {
+  display: flex;
+  width: 100%;
+}
+.seg.wide button {
+  flex: 1;
+  padding: 10px 0;
+}
+.newcol h2 {
+  font-size: 20px;
+  font-weight: 800;
+}
+.field.code {
+  width: 150px;
+}
+.field.code input {
+  text-transform: uppercase;
+}
+
 /* ───────── Scan tray ───────── */
 .tray-total {
   font-size: 12px;

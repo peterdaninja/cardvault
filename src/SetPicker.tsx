@@ -1,29 +1,38 @@
 import { useEffect, useMemo, useState } from 'react'
-import { getSets, type TcgSet } from './lib/sets'
+import type { CatalogSet } from './lib/catalog'
+import { adapterFor } from './lib/games'
+import type { Game } from './lib/types'
 
 interface Props {
+  game: Game
   title: string
   currentId?: string
-  onPick: (set: TcgSet | null) => void // null = any set
+  onPick: (set: CatalogSet | null) => void // null = any set
   onCancel: () => void
 }
 
+const INITIAL_ROWS = 120
+
 /** Searchable list of official sets. Picking one limits a collection's searches to that set. */
-export default function SetPicker({ title, currentId, onPick, onCancel }: Props) {
-  const [sets, setSets] = useState<TcgSet[] | null>(null)
+export default function SetPicker({ game, title, currentId, onPick, onCancel }: Props) {
+  const [sets, setSets] = useState<CatalogSet[] | null>(null)
   const [error, setError] = useState('')
   const [q, setQ] = useState('')
 
   function load() {
     setError('')
-    getSets().then(setSets).catch((e) => setError(e instanceof Error ? e.message : 'Failed to load sets'))
+    adapterFor(game)
+      .getSets()
+      .then(setSets)
+      .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load sets'))
   }
-  useEffect(load, [])
+  useEffect(load, [game]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const shown = useMemo(() => {
     const t = q.trim().toLowerCase()
-    if (!t || !sets) return sets ?? []
-    return sets.filter((s) => `${s.name} ${s.series} ${s.id}`.toLowerCase().includes(t))
+    if (!sets) return []
+    if (!t) return sets.slice(0, INITIAL_ROWS)
+    return sets.filter((s) => `${s.name} ${s.series ?? ''} ${s.id}`.toLowerCase().includes(t)).slice(0, 300)
   }, [sets, q])
 
   return (
@@ -37,7 +46,7 @@ export default function SetPicker({ title, currentId, onPick, onCancel }: Props)
         <input
           className="search"
           autoFocus
-          placeholder="Search sets (e.g. Base, 151, Celebration)"
+          placeholder={game === 'yugioh' ? 'Search sets (e.g. Kaiba, LOB, Metal Raiders)' : 'Search sets (e.g. Base, 151, Celebration)'}
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
@@ -54,15 +63,20 @@ export default function SetPicker({ title, currentId, onPick, onCancel }: Props)
 
         <ul className="results">
           {shown.map((s) => (
-            <li key={s.id} onClick={() => onPick(s)}>
+            <li key={s.id + s.name} onClick={() => onPick(s)}>
               {s.symbol && <img src={s.symbol} alt="" className="sym" loading="lazy" />}
               <div className="meta">
                 <strong>{s.name}{s.id === currentId ? ' ✓' : ''}</strong>
-                <span>{s.series} · {s.releaseDate.slice(0, 4)}{s.printedTotal ? ` · ${s.printedTotal} cards` : ''}</span>
+                <span>
+                  {[s.series, s.releaseDate?.slice(0, 4), s.id, s.total ? `${s.total} cards` : ''].filter(Boolean).join(' · ')}
+                </span>
               </div>
             </li>
           ))}
         </ul>
+        {sets && !q && sets.length > INITIAL_ROWS && (
+          <p className="hint">Showing the newest {INITIAL_ROWS} of {sets.length} sets. Search to find the rest.</p>
+        )}
       </div>
     </div>
   )

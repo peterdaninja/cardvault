@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { beep, cropGuide, guideSignature, sigDiff } from './lib/frame'
 import { levenshtein, norm } from './lib/names'
-import { scanCanvas } from './lib/ocr'
-import { findCards, marketPrice, toOwned } from './lib/tcg'
+import { toOwned, type CatalogCard } from './lib/catalog'
+import { adapterFor } from './lib/games'
+import { scanFor, type ScanResult } from './lib/scan'
 import { money } from './ui/format'
-import type { Collection, OwnedCard, TcgCard } from './lib/types'
+import type { Collection, Game, OwnedCard } from './lib/types'
 
 interface Props {
   collections: Collection[]
@@ -17,7 +18,7 @@ interface ReviewItem {
   key: number
   thumb: string
   note: string
-  candidates: TcgCard[]
+  candidates: CatalogCard[]
 }
 
 interface AddedItem {
@@ -186,15 +187,21 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
 
     try {
       setStatus('Reading card…')
-      const scan = await scanCanvas(card, undefined, true)
+      const scan = await scanFor(gameRef.current, card, undefined, true)
       if (!scan.name && !scan.number) {
         addReview({ key, thumb, note: 'Could not read this card.', candidates: [] })
         return
       }
       setStatus(`Looking up ${scan.name || 'card'} ${scan.number}…`)
-      let results: TcgCard[] = []
+      let results: CatalogCard[] = []
       try {
-        results = await findCards(scan.name, scan.number, scan.total, scan.nameConfident, setIdRef.current)
+        results = await adapterFor(gameRef.current).findCards({
+          name: scan.name,
+          number: scan.number,
+          total: scan.total,
+          trustName: scan.nameConfident,
+          setId: setIdRef.current,
+        })
       } catch (e) {
         addReview({
           key,
@@ -205,11 +212,11 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
         return
       }
 
-      const pick = confidentMatch(results, scan.nameConfident && !!scan.number, scan.total, !!setIdRef.current && !!scan.number, scan.name)
+      const pick = confidentMatch(results, gameRef.current, scan, !!setIdRef.current)
       if (pick) {
         onAddRef.current(toOwned(pick, collectionRef.current))
         setAdded((a) => [
-          { key, name: pick.name, image: pick.images.small, detail: `${pick.set.name} · #${pick.number}`, price: marketPrice(pick) },
+          { key, name: pick.name, image: pick.image, detail: `${pick.setName} · #${pick.number}`, price: pick.price },
           ...a,
         ].slice(0, 30))
         beep(880, 110)
@@ -236,11 +243,11 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
     loop.current.busy = false
   }
 
-  function resolve(item: ReviewItem, card?: TcgCard) {
+  function resolve(item: ReviewItem, card?: CatalogCard) {
     if (card) {
       onAdd(toOwned(card, collectionId))
       setAdded((a) => [
-        { key: item.key, name: card.name, image: card.images.small, detail: `${card.set.name} · #${card.number}`, price: marketPrice(card) },
+        { key: item.key, name: card.name, image: card.image, detail: `${card.setName} · #${card.number}`, price: card.price },
         ...a,
       ].slice(0, 30))
     }
@@ -252,6 +259,9 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
   const setId = col?.setId
   const setIdRef = useRef(setId)
   setIdRef.current = setId
+  const game: Game = adapterFor(col?.game).key
+  const gameRef = useRef(game)
+  gameRef.current = game
 
   return (
     <div className="bulk">
@@ -272,7 +282,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
             Add cards to
             <select value={collectionId} onChange={(e) => setCollectionId(e.target.value)}>
               {collections.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
+                <option key={c.id} value={c.id}>{c.name} · {adapterFor(c.game).label}</option>
               ))}
             </select>
           </label>
@@ -304,7 +314,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
                     <div className="cands">
                       {item.candidates.map((c) => (
                         <button key={c.id} onClick={() => resolve(item, c)}>
-                          {c.name} · {c.set.name} #{c.number}
+                          {c.name} · {c.setName} #{c.number}
                         </button>
                       ))}
                     </div>
@@ -338,30 +348,41 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
   )
 }
 
+const nameSim = (x: string, y: string) => {
+  const a = norm(x)
+  const b = norm(y)
+  return a && b ? 1 - levenshtein(a, b) / Math.max(a.length, b.length) : 0
+}
+
 /**
- * Auto-add only when the match is clear: a confidently read name plus number that leads to
- * exactly one card, or to one card whose set total agrees with the printed total.
+ * Auto-add only when the match is clear; anything less goes to the review list.
+ *  - Pokémon: a confidently read name plus number that leads to exactly one card, or to one card
+ *    whose set total agrees with the printed total. In a set-locked collection a number is unique.
+ *  - Yu-Gi-Oh!: the set code must match a printing exactly, and the name must roughly agree.
  */
 function confidentMatch(
-  results: TcgCard[],
-  confident: boolean,
-  total: string,
+  results: CatalogCard[],
+  game: Game,
+  scan: ScanResult,
   setLocked: boolean,
-  readName: string,
-): TcgCard | null {
+): CatalogCard | null {
   if (!results.length) return null
-  // In a set-locked collection a collector number is unique, so one result is enough as long as the
-  // name is not contradicting it.
-  if (setLocked && results.length === 1) {
-    const a = norm(readName)
-    const b = norm(results[0].name)
-    const sim = a && b ? 1 - levenshtein(a, b) / Math.max(a.length, b.length) : 0
-    if (confident || sim >= 0.6) return results[0]
+
+  if (game === 'yugioh') {
+    const r = results[0]
+    if (!scan.number || r.number.toUpperCase() !== scan.number.toUpperCase()) return null
+    const s = nameSim(scan.name, r.name)
+    if (scan.name.length >= 4 && s < 0.5) return null // the code and the name disagree
+    return scan.nameConfident || s >= 0.6 ? r : null
   }
-  if (!confident) return null
+
+  if (setLocked && !!scan.number && results.length === 1) {
+    if (scan.nameConfident || nameSim(scan.name, results[0].name) >= 0.6) return results[0]
+  }
+  if (!(scan.nameConfident && !!scan.number)) return null
   if (results.length === 1) return results[0]
-  if (total) {
-    const sameTotal = results.filter((c) => String(c.set.printedTotal) === total)
+  if (scan.total) {
+    const sameTotal = results.filter((c) => String(c.setPrintedTotal) === scan.total)
     if (sameTotal.length === 1) return sameTotal[0]
   }
   return null

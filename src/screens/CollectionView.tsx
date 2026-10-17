@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { getSetCards } from '../lib/setcards'
-import { getSets } from '../lib/sets'
-import { marketPrice } from '../lib/tcg'
-import type { Collection, OwnedCard, TcgCard } from '../lib/types'
+import type { CatalogCard } from '../lib/catalog'
+import { adapterFor } from '../lib/games'
+import type { Collection, OwnedCard } from '../lib/types'
 import { money } from '../ui/format'
 import { ChevronLeft, SearchIcon } from '../ui/icons'
 
@@ -13,7 +12,7 @@ interface Props {
   onChangeSet: () => void
   onCard: (id: string) => void
   onQty: (id: string, delta: number) => void
-  onCollect: (card: TcgCard) => void
+  onCollect: (card: CatalogCard) => void
   onPatch: (patch: Partial<Collection>) => void
   onDelete: () => void
 }
@@ -26,36 +25,38 @@ interface Item {
   image: string
   price: number | null
   owned?: OwnedCard
-  tcg?: TcgCard
+  card?: CatalogCard
 }
 
 type View = 'all' | 'owned' | 'missing'
 type Sort = 'number' | 'value'
 
 export default function CollectionView({ collection, owned, onBack, onChangeSet, onCard, onQty, onCollect, onPatch, onDelete }: Props) {
-  const [setCards, setSetCards] = useState<TcgCard[] | null>(null)
+  const [setCards, setSetCards] = useState<CatalogCard[] | null>(null)
   const [error, setError] = useState('')
   const [view, setView] = useState<View>('all')
   const [sort, setSort] = useState<Sort>('number')
   const [rarity, setRarity] = useState('')
   const [q, setQ] = useState('')
   const setId = collection.setId
+  const adapter = adapterFor(collection.game)
 
   function load() {
     if (!setId) return
     setError('')
     setSetCards(null)
-    getSetCards(setId).then(setSetCards).catch((e) => setError(e instanceof Error ? e.message : 'Could not load this set'))
+    adapter.getSetCards(setId).then(setSetCards).catch((e) => setError(e instanceof Error ? e.message : 'Could not load this set'))
   }
   useEffect(load, [setId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Collections made before logos existed pick up the set logo and full card count here.
   useEffect(() => {
     if (!setId || (collection.setLogo && collection.setTotal)) return
-    getSets()
+    adapter
+      .getSets()
       .then((sets) => {
         const s = sets.find((x) => x.id === setId)
-        if (s) onPatch({ setLogo: s.logo, setTotal: s.total ?? s.printedTotal })
+        if (s) onPatch({ setLogo: s.logo, setTotal: s.total })
       })
       .catch(() => {})
   }, [setId]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -68,11 +69,11 @@ export default function CollectionView({ collection, owned, onBack, onChangeSet,
         key: c.id,
         name: c.name,
         number: c.number,
-        rarity: c.rarity ?? '',
-        image: c.images.small,
-        price: marketPrice(c),
+        rarity: c.rarity,
+        image: c.image,
+        price: c.price,
         owned: ownedByCard.get(c.id),
-        tcg: c,
+        card: c,
       }))
     }
     return [...owned]
@@ -98,7 +99,7 @@ export default function CollectionView({ collection, owned, onBack, onChangeSet,
   const totalCards = setCards?.length || collection.setTotal || 0
   const pct = totalCards ? Math.min(100, Math.round((uniqueOwned / totalCards) * 100)) : 0
   const value = owned.reduce((s, c) => s + (c.price ?? 0) * c.qty, 0)
-  const release = setCards?.[0]?.set.releaseDate
+  const release = setCards?.[0]?.releaseDate
 
   return (
     <>
@@ -177,7 +178,7 @@ export default function CollectionView({ collection, owned, onBack, onChangeSet,
           {shown.map((i) => (
             <div className={`stile ${i.owned ? '' : 'missing'}`} key={i.key}>
               <button className="simg" disabled={!i.owned} onClick={() => i.owned && onCard(i.owned.id)}>
-                <img src={i.image} alt={i.name} loading="lazy" />
+                <img src={i.image} alt={i.name} loading="lazy" onError={(e) => (e.currentTarget.style.opacity = '0.15')} />
               </button>
               {i.owned ? (
                 <div className="act owned">
@@ -185,7 +186,7 @@ export default function CollectionView({ collection, owned, onBack, onChangeSet,
                   <button onClick={() => onQty(i.owned!.id, 1)} aria-label="Add one more">＋</button>
                 </div>
               ) : (
-                <button className="act collect" onClick={() => i.tcg && onCollect(i.tcg)}>Collect</button>
+                <button className="act collect" onClick={() => i.card && onCollect(i.card)}>Collect</button>
               )}
               <div className="cap">
                 <span className="n">{i.name}</span>
