@@ -15,6 +15,10 @@ interface Props {
   onImport: (rows: Row[], collectionId: string) => void
   /** Make a collection tied to a set (or any set when `set` is undefined). Returns its id. */
   onCreateCollection: (game: Game, set: { id: string; name: string } | undefined, name: string) => string
+  /** Add to existing collections and create the missing ones, all in one go. */
+  onImportPlan: (
+    plan: { game: Game; name: string; setInfo?: { id: string; name: string }; collectionId?: string; rows: Row[] }[],
+  ) => void
   onClose: () => void
 }
 
@@ -31,7 +35,7 @@ interface Group {
 
 const SHOW_LIMIT = 60
 
-export default function Import({ collections, onImport, onCreateCollection, onClose }: Props) {
+export default function Import({ collections, onImport, onCreateCollection, onImportPlan, onClose }: Props) {
   const [stage, setStage] = useState<Stage>('input')
   const [text, setText] = useState('')
   const [fileName, setFileName] = useState('')
@@ -152,6 +156,36 @@ export default function Import({ collections, onImport, onCreateCollection, onCl
     finish(picked, id)
   }
 
+  /** Every selected card goes to its set's collection, creating the collections that don't exist yet. */
+  function importEverything() {
+    const plan = groups
+      .map((g) => ({ g, picked: g.items.filter((i) => selected.has(i.key)) }))
+      .filter((x) => x.picked.length)
+      .map(({ g, picked }) => ({
+        game: g.game,
+        name: g.title,
+        setInfo: g.collection || !g.setId ? undefined : { id: g.setId, name: g.title },
+        collectionId: g.collection?.id,
+        rows: picked.map((i) => ({ card: i.card!, qty: i.entry.qty })),
+      }))
+    if (!plan.length) return
+    const created = plan.filter((p) => !p.collectionId).length
+    const cardCount = plan.reduce((n, p) => n + p.rows.length, 0)
+    const ok = confirm(
+      created
+        ? `Add ${cardCount} cards? This creates ${created} new collection${created === 1 ? '' : 's'} (one per set) and adds to ${plan.length - created} you already have.`
+        : `Add ${cardCount} cards to ${plan.length} of your collections?`,
+    )
+    if (!ok) return
+    onImportPlan(plan)
+    const doneKeys = new Set(groups.flatMap((g) => g.items.filter((i) => selected.has(i.key)).map((i) => i.key)))
+    const copies = plan.reduce((n, p) => n + p.rows.reduce((m, r) => m + r.qty, 0), 0)
+    setItems((all) => all.filter((i) => !doneKeys.has(i.key)))
+    setSelected((s) => new Set([...s].filter((k) => !doneKeys.has(k))))
+    setImportedCount((n) => n + copies)
+    setMessage(`Added ${cardCount} cards${created ? ` and created ${created} collection${created === 1 ? '' : 's'}` : ''}.`)
+  }
+
   function importSelected() {
     const target = collections.find((c) => c.id === dest)
     if (!target) return
@@ -176,6 +210,19 @@ export default function Import({ collections, onImport, onCreateCollection, onCl
   }
 
   const selectedCount = matched.filter((i) => selected.has(i.key)).length
+
+  // What the "import all" button will do, shown on the button itself.
+  const allPlan = useMemo(() => {
+    let cards = 0
+    let created = 0
+    for (const g of groups) {
+      const n = g.items.filter((i) => selected.has(i.key)).length
+      if (!n) continue
+      cards += n
+      if (!g.collection) created++
+    }
+    return { cards, created }
+  }, [groups, selected])
 
   return (
     <div className="sheet importer">
@@ -287,7 +334,13 @@ export default function Import({ collections, onImport, onCreateCollection, onCl
                   <button onClick={() => setSelected(new Set())}>None</button>
                   <span className="hint grow" style={{ textAlign: 'right', margin: 0 }}>{selectedCount} selected</span>
                 </div>
-                <div className="row" style={{ marginTop: 8 }}>
+                <button className="primary big" style={{ marginTop: 8 }} disabled={!selectedCount} onClick={importEverything}>
+                  {allPlan.cards
+                    ? `Import all ${allPlan.cards} selected · ${allPlan.created ? `create ${allPlan.created} collection${allPlan.created === 1 ? '' : 's'}` : 'to your collections'}`
+                    : 'Import all selected'}
+                </button>
+                <p className="hint" style={{ margin: '6px 0 2px' }}>Or send the selected cards to one collection:</p>
+                <div className="row" style={{ marginTop: 4 }}>
                   <select className="grow" value={dest} onChange={(e) => setDest(e.target.value)} aria-label="Import into">
                     {collections.map((c) => <option key={c.id} value={c.id}>{c.name} · {adapterFor(c.game).label}</option>)}
                   </select>

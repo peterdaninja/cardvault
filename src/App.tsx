@@ -24,6 +24,30 @@ type PickerState = { mode: 'new'; name: string; game: Game } | { mode: 'edit'; i
 
 const PRICE_REFRESH_MS = 20 * 60 * 60 * 1000
 
+interface ImportPlanEntry {
+  game: Game
+  name: string
+  setInfo?: { id: string; name: string }
+  collectionId?: string // missing = create a new collection
+  rows: { card: CatalogCard; qty: number }[]
+}
+
+const cardKey = (collectionId: string, game: string | undefined, cardId: string) => `${collectionId}|${game ?? 'pokemon'}|${cardId}`
+const indexCards = (cards: OwnedCard[]) => new Map(cards.map((c, i) => [cardKey(c.collectionId, c.game, c.cardId), i]))
+
+/** Add rows into a collection, raising the quantity of cards already there. Mutates `cards` and `index`. */
+function mergeRows(cards: OwnedCard[], index: Map<string, number>, collectionId: string, rows: { card: CatalogCard; qty: number }[]) {
+  for (const { card, qty } of rows) {
+    const key = cardKey(collectionId, card.game, card.id)
+    const at = index.get(key)
+    if (at != null) cards[at] = { ...cards[at], qty: cards[at].qty + qty }
+    else {
+      index.set(key, cards.length)
+      cards.push({ ...toOwned(card, collectionId), qty })
+    }
+  }
+}
+
 export default function App() {
   const [state, setState] = useState<AppState | null>(null)
   const [tab, setTab] = useState<Tab>('home')
@@ -154,20 +178,38 @@ export default function App() {
     })
   }
 
+  /**
+   * Everything the importer's "import all" button does in one update: add cards to existing
+   * collections and create any that are missing, so hundreds of collections cost one save.
+   */
+  function importPlan(plan: ImportPlanEntry[]) {
+    updateWith((s) => {
+      const collections = [...s.collections]
+      const cards = [...s.cards]
+      const index = indexCards(cards)
+      for (const p of plan) {
+        let id = p.collectionId
+        if (!id) {
+          id = uid()
+          collections.push({
+            id,
+            name: p.name,
+            game: p.game,
+            createdAt: Date.now(),
+            ...(p.setInfo ? { setId: p.setInfo.id, setName: p.setInfo.name } : {}),
+          })
+        }
+        mergeRows(cards, index, id, p.rows)
+      }
+      return { ...s, collections, cards }
+    })
+  }
+
   /** Add many cards at once (used by the list importer). Existing copies just get their quantity raised. */
   function addMany(rows: { card: CatalogCard; qty: number }[], collectionId: string) {
     updateWith((s) => {
       const cards = [...s.cards]
-      const index = new Map(cards.map((c, i) => [`${c.collectionId}|${c.game ?? 'pokemon'}|${c.cardId}`, i]))
-      for (const { card, qty } of rows) {
-        const key = `${collectionId}|${card.game}|${card.id}`
-        const at = index.get(key)
-        if (at != null) cards[at] = { ...cards[at], qty: cards[at].qty + qty }
-        else {
-          index.set(key, cards.length)
-          cards.push({ ...toOwned(card, collectionId), qty })
-        }
-      }
+      mergeRows(cards, indexCards(cards), collectionId, rows)
       return { ...s, cards }
     })
   }
@@ -253,6 +295,7 @@ export default function App() {
           collections={state.collections}
           onImport={addMany}
           onCreateCollection={createCollection}
+          onImportPlan={importPlan}
           onClose={() => setImporting(false)}
         />
       )}
