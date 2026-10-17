@@ -96,6 +96,7 @@ export default function AddCard({ collections, defaultCollectionId, onAdd, onClo
     <div className="sheet">
       {camera && (
         <Camera
+          game={adapter.key}
           onCancel={() => setCamera(false)}
           onCapture={(c) => {
             setCamera(false)

@@ -3,6 +3,7 @@ import { beep, cropGuide, guideSignature, sigDiff } from './lib/frame'
 import { levenshtein, norm } from './lib/names'
 import { toOwned, type CatalogCard } from './lib/catalog'
 import { adapterFor } from './lib/games'
+import { CAMERA_CONSTRAINTS, keepFocused, ZONES } from './lib/zones'
 import { scanFor, type ScanResult } from './lib/scan'
 import { money } from './ui/format'
 import type { Collection, Game, OwnedCard } from './lib/types'
@@ -70,13 +71,11 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
     let stream: MediaStream | undefined
     let cancelled = false
     navigator.mediaDevices
-      ?.getUserMedia({
-        video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
-        audio: false,
-      })
+      ?.getUserMedia(CAMERA_CONSTRAINTS)
       .then((s) => {
         if (cancelled) return s.getTracks().forEach((t) => t.stop())
         stream = s
+        keepFocused(s)
         if (videoRef.current) {
           videoRef.current.srcObject = s
           videoRef.current.play().catch(() => {})
@@ -267,7 +266,17 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
     <div className="bulk">
       <div className="bulk-cam" ref={boxRef}>
         <video ref={videoRef} playsInline muted />
-        <div className="guide" ref={guideRef} style={{ aspectRatio: String(RATIO), height: '90%' }} />
+        <div className="guide" ref={guideRef} style={{ aspectRatio: String(RATIO), height: '90%' }}>
+          {ZONES[game].map((z) => (
+            <span
+              key={z.label + z.box.join()}
+              className="zone"
+              style={{ left: `${z.box[0] * 100}%`, top: `${z.box[1] * 100}%`, width: `${(z.box[2] - z.box[0]) * 100}%`, height: `${(z.box[3] - z.box[1]) * 100}%` }}
+            >
+              <i>{z.label}</i>
+            </span>
+          ))}
+        </div>
       </div>
 
       <div className="bulk-panel">

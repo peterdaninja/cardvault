@@ -448,6 +448,32 @@
   text-transform: uppercase;
 }
 
+/* Reading-zone markers on the camera guide */
+.zone {
+  position: absolute;
+  pointer-events: none;
+  border: 1.5px dashed var(--accent-2);
+  border-radius: 6px;
+  background: rgba(255, 148, 64, 0.1);
+}
+.zone i {
+  position: absolute;
+  left: 0;
+  top: -15px;
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-2);
+  text-shadow: 0 1px 3px #000;
+  white-space: nowrap;
+}
+.zone:nth-child(n + 3) i {
+  top: auto;
+  bottom: -15px;
+}
+
 /* ───────── Scan tray ───────── */
 .tray-total {
   font-size: 12px;
