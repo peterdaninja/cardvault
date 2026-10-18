@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { CardTracker } from './lib/autoscan'
-import { beep, boxToScreen, cropBox, cropGuide, frameSignature, type Box, type FrameSig } from './lib/frame'
+import { beep, boxToScreen, cropBox, cropCenter, frameSignature, isBlank, type Box, type FrameSig } from './lib/frame'
 import { toOwned, type CatalogCard } from './lib/catalog'
 import { adapterFor } from './lib/games'
 import { CAMERA_CONSTRAINTS, keepFocused, ZONES } from './lib/zones'
@@ -31,14 +31,12 @@ interface AddedItem {
   price: number | null
 }
 
-const RATIO = 63 / 88
 const TICK_MS = 150
 
 /** Hands-free scanning for a phone on a mount: feed cards one after another and they add themselves. */
 export default function BulkScan({ collections, defaultCollectionId, onAdd, onClose }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const boxRef = useRef<HTMLDivElement>(null)
-  const guideRef = useRef<HTMLDivElement>(null)
 
   const [collectionId, setCollectionId] = useState(defaultCollectionId)
   const [running, setRunning] = useState(false)
@@ -136,7 +134,10 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
     setDetected(r.box)
     if (r.state === 'empty') setStatus('Ready. Feed the next card.')
     else if (r.state === 'capture') capture(sig, r.box)
-    else setStatus(r.box ? 'Card found, hold still…' : 'Something is there, hold still…')
+    else if (r.box) {
+      const px = Math.round((r.box.x1 - r.box.x0) * (videoRef.current?.videoWidth ?? 0))
+      setStatus(px && px < 650 ? `Card found (${px}px wide). It looks small, so move the phone closer for a better read.` : 'Card found, hold still…')
+    } else setStatus('Something is there, looking for the card…')
   }
 
   function forceScan() {
@@ -147,14 +148,18 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
   async function capture(sig: FrameSig, box: Box | null) {
     const l = loop.current
     const v = videoRef.current
-    const b = boxRef.current
-    const g = guideRef.current
-    if (!v || !b || !g) return
-    // Cut out the card that was found; if none was clearly found, fall back to the on-screen outline.
-    const card = (box && cropBox(v, box)) || cropGuide(v, b, g)
+    if (!v) return
+    // Cut out the card that was found; if none was clearly found, take a card-shaped piece of the middle.
+    const card = (box && cropBox(v, box)) || cropCenter(v)
     if (!card) return
     l.busy = true
-    tracker.current.markCaptured(sig)
+    if (isBlank(card)) {
+      // The camera frame could not be copied (rather than the card being dark): say so instead of scanning black.
+      addReview({ key: ++l.key, thumb: '', note: 'The camera frame came back blank. Tap Stop, then Start again.', candidates: [] })
+      l.busy = false
+      return
+    }
+    tracker.current.markCaptured(sig, box)
     const key = ++l.key
     const thumb = makeThumb(card)
 
@@ -253,17 +258,6 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
             ))}
           </div>
         )}
-        <div className="guide" ref={guideRef} style={{ aspectRatio: String(RATIO), height: '84%', opacity: detected ? 0 : 1 }}>
-          {ZONES[game].map((z) => (
-            <span
-              key={z.label + z.box.join()}
-              className="zone"
-              style={{ left: `${z.box[0] * 100}%`, top: `${z.box[1] * 100}%`, width: `${(z.box[2] - z.box[0]) * 100}%`, height: `${(z.box[3] - z.box[1]) * 100}%` }}
-            >
-              <i>{z.label}</i>
-            </span>
-          ))}
-        </div>
       </div>
 
       <div className="bulk-panel">
@@ -346,7 +340,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
 
 function foundStyle(box: Box, container: HTMLElement, video: HTMLVideoElement): React.CSSProperties {
   if (!video.videoWidth) return { display: 'none' }
-  const r = boxToScreen(box, container.getBoundingClientRect(), video.videoWidth, video.videoHeight)
+  const r = boxToScreen(box, container.getBoundingClientRect(), video.videoWidth, video.videoHeight, 'contain')
   return { left: r.left, top: r.top, width: r.width, height: r.height }
 }
 

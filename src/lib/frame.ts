@@ -68,7 +68,8 @@ export function beep(freq = 880, ms = 120) {
 
 /** A small grayscale copy of a whole camera frame, for cheap comparisons. */
 export interface FrameSig {
-  px: Uint8Array
+  px: Uint8Array // brightness, one byte per pixel
+  rgb: Uint8Array // color, three bytes per pixel, so a colorful card stands out from a grey wall
   w: number
   h: number
 }
@@ -95,8 +96,17 @@ export function frameSignatureOf(source: CanvasImageSource, srcW: number, srcH: 
   ctx.drawImage(source, 0, 0, w, h)
   const data = ctx.getImageData(0, 0, w, h).data
   const px = new Uint8Array(w * h)
-  for (let i = 0; i < px.length; i++) px[i] = (data[i * 4] * 299 + data[i * 4 + 1] * 587 + data[i * 4 + 2] * 114) / 1000
-  return { px, w, h }
+  const rgb = new Uint8Array(w * h * 3)
+  for (let i = 0; i < px.length; i++) {
+    const r = data[i * 4]
+    const g = data[i * 4 + 1]
+    const b = data[i * 4 + 2]
+    px[i] = (r * 299 + g * 587 + b * 114) / 1000
+    rgb[i * 3] = r
+    rgb[i * 3 + 1] = g
+    rgb[i * 3 + 2] = b
+  }
+  return { px, rgb, w, h }
 }
 
 export const frameSignature = (video: HTMLVideoElement) => frameSignatureOf(video, video.videoWidth, video.videoHeight)
@@ -109,37 +119,63 @@ export function meanDiff(a: FrameSig, b: FrameSig): number {
   return sum / a.px.length
 }
 
-/** Per-pixel difference with any overall brightness shift (auto-exposure) removed. */
+/**
+ * Work out what auto-exposure did to the whole picture, as "now = gain * before + offset".
+ * A bright card entering the view makes the camera darken everything. The static background all
+ * shifts by the same ratio, while the card's pixels each change differently, so the most common
+ * ratio between the two frames is the camera's doing, even when the card covers much of the view.
+ */
+function fitExposure(cur: FrameSig, base: FrameSig): { gain: number; offset: number } {
+  const BINS = 80
+  const LO = 0.4
+  const STEP = 0.02
+  const n = cur.px.length
+  const hist = new Uint32Array(BINS)
+  for (let i = 0; i < n; i++) {
+    const bv = base.px[i]
+    if (bv < 24) continue // too dark for a stable ratio
+    const idx = Math.floor((cur.px[i] / bv - LO) / STEP)
+    if (idx >= 0 && idx < BINS) hist[idx]++
+  }
+  let best = -1
+  let bestCount = 0
+  for (let i = 0; i < BINS; i++) {
+    const c = (hist[i - 1] ?? 0) + hist[i] + (hist[i + 1] ?? 0)
+    if (c > bestCount) {
+      bestCount = c
+      best = i
+    }
+  }
+  if (best >= 0 && bestCount >= 200) {
+    const gain = LO + (best + 0.5) * STEP
+    const resid: number[] = []
+    for (let i = 0; i < n; i++) {
+      const bv = base.px[i]
+      if (bv >= 24 && Math.abs(cur.px[i] / bv - gain) < 0.08) resid.push(cur.px[i] - gain * bv)
+    }
+    resid.sort((x, y) => x - y)
+    return { gain, offset: resid.length ? resid[Math.floor(resid.length / 2)] : 0 }
+  }
+  // A very dark scene: no bright background to measure from, so just correct the overall brightness.
+  const diffs: number[] = []
+  for (let i = 0; i < n; i += 3) diffs.push(cur.px[i] - base.px[i])
+  diffs.sort((x, y) => x - y)
+  return { gain: 1, offset: Math.max(-40, Math.min(40, diffs[Math.floor(diffs.length / 2)] ?? 0)) }
+}
+
 function diffMask(cur: FrameSig, base: FrameSig, thresh: number): Uint8Array | null {
   if (cur.px.length !== base.px.length) return null
   const n = cur.px.length
-  // Auto-exposure shifts the whole picture's brightness a little. Measure that from the outer edge of
-  // the frame, where a card rarely reaches (the middle would be the card itself when it fills the view).
-  const bins = new Uint32Array(511)
-  let ring = 0
-  const mx = Math.max(1, Math.round(cur.w * 0.08))
-  const my = Math.max(1, Math.round(cur.h * 0.06))
-  for (let y = 0; y < cur.h; y++) {
-    for (let x = 0; x < cur.w; x++) {
-      if (x < mx || x >= cur.w - mx || y < my || y >= cur.h - my) {
-        const i = y * cur.w + x
-        bins[cur.px[i] - base.px[i] + 255]++
-        ring++
-      }
-    }
-  }
-  let acc = 0
-  let median = 0
-  for (let b = 0; b < 511; b++) {
-    acc += bins[b]
-    if (acc >= ring / 2) {
-      median = b - 255
-      break
-    }
-  }
-  median = Math.max(-25, Math.min(25, median)) // real exposure drift is small; never let it swallow a card
+  const { gain, offset } = fitExposure(cur, base)
   const mask = new Uint8Array(n)
-  for (let i = 0; i < n; i++) mask[i] = Math.abs(cur.px[i] - base.px[i] - median) > thresh ? 1 : 0
+  for (let i = 0; i < n; i++) {
+    // The biggest change in any color channel, so a card that matches the wall in brightness still shows up.
+    const j = i * 3
+    const dr = Math.abs(cur.rgb[j] - (gain * base.rgb[j] + offset))
+    const dg = Math.abs(cur.rgb[j + 1] - (gain * base.rgb[j + 1] + offset))
+    const db = Math.abs(cur.rgb[j + 2] - (gain * base.rgb[j + 2] + offset))
+    mask[i] = Math.max(dr, dg, db) > thresh ? 1 : 0
+  }
   return mask
 }
 
@@ -150,6 +186,25 @@ export function changedFraction(cur: FrameSig, base: FrameSig, thresh = 28): num
   let c = 0
   for (let i = 0; i < mask.length; i++) c += mask[i]
   return c / mask.length
+}
+
+/** Fraction of a rectangle (frame fractions) that differs from a reference. */
+export function changedFractionIn(cur: FrameSig, base: FrameSig, box: Box, thresh = 28): number {
+  const mask = diffMask(cur, base, thresh)
+  if (!mask) return 1
+  const x0 = Math.floor(box.x0 * cur.w)
+  const x1 = Math.max(x0 + 1, Math.ceil(box.x1 * cur.w))
+  const y0 = Math.floor(box.y0 * cur.h)
+  const y1 = Math.max(y0 + 1, Math.ceil(box.y1 * cur.h))
+  let changed = 0
+  let total = 0
+  for (let y = y0; y < y1 && y < cur.h; y++) {
+    for (let x = x0; x < x1 && x < cur.w; x++) {
+      changed += mask[y * cur.w + x]
+      total++
+    }
+  }
+  return total ? changed / total : 0
 }
 
 const CARD_ASPECT = 63 / 88
@@ -174,12 +229,12 @@ export function detectCardBox(cur: FrameSig, base: FrameSig): Box | null {
       }
     }
   }
-  if (total < w * h * 0.04) return null
+  if (total < w * h * 0.01) return null
 
   // The card is where a good share of each row/column changed; stray specks and hands at the edge fall below that.
   const span = (counts: Float32Array, len: number): [number, number] | null => {
     const peak = Math.max(...counts)
-    if (peak < len * 0.2) return null
+    if (peak < len * 0.08) return null
     const cut = peak * 0.5
     let lo = 0
     let hi = counts.length - 1
@@ -201,7 +256,8 @@ export function detectCardBox(cur: FrameSig, base: FrameSig): Box | null {
   // It must look like a card: portrait, of a sensible size, mostly filled with change.
   const aspect = bw / bh
   if (aspect < 0.5 || aspect > 1.0) return null
-  if ((bw * bh) / (w * h) < 0.06) return null
+  const area = (bw * bh) / (w * h)
+  if (area < 0.012 || area > 0.92) return null // too small to be a card, or the whole view changed
   let inside = 0
   for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) inside += mask[y * w + x]
   if (inside / (bw * bh) < 0.4) return null
@@ -220,28 +276,78 @@ export function detectCardBox(cur: FrameSig, base: FrameSig): Box | null {
   return { x0: x0 / w, y0: y0 / h, x1: x1 / w, y1: y1 / h }
 }
 
-/** Full-resolution crop of a detected card rectangle. */
-export function cropBox(video: HTMLVideoElement, box: Box): HTMLCanvasElement | null {
-  if (!video.videoWidth) return null
-  const sx = box.x0 * video.videoWidth
-  const sy = box.y0 * video.videoHeight
-  const sw = (box.x1 - box.x0) * video.videoWidth
-  const sh = (box.y1 - box.y0) * video.videoHeight
+const MAX_CROP_SIDE = 2200
+
+/** Copy part of the video into a canvas, capped in size so a huge region can never make a blank canvas. */
+function drawCrop(video: HTMLVideoElement, sx: number, sy: number, sw: number, sh: number): HTMLCanvasElement | null {
+  const scale = Math.min(1, MAX_CROP_SIDE / Math.max(sw, sh))
   const out = document.createElement('canvas')
-  out.width = Math.round(sw)
-  out.height = Math.round(sh)
-  out.getContext('2d')!.drawImage(video, sx, sy, sw, sh, 0, 0, out.width, out.height)
+  out.width = Math.max(1, Math.round(sw * scale))
+  out.height = Math.max(1, Math.round(sh * scale))
+  const ctx = out.getContext('2d')
+  if (!ctx) return null
+  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, out.width, out.height)
   return out
 }
 
-/** Where a frame-fraction box lands on screen when the video fills its container with object-fit: cover. */
-export function boxToScreen(box: Box, container: DOMRect, vw: number, vh: number) {
-  const scale = Math.max(container.width / vw, container.height / vh)
-  const offX = (vw * scale - container.width) / 2
-  const offY = (vh * scale - container.height) / 2
+/** Crop of a detected card rectangle, at full resolution up to a sensible cap. */
+export function cropBox(video: HTMLVideoElement, box: Box): HTMLCanvasElement | null {
+  if (!video.videoWidth) return null
+  return drawCrop(
+    video,
+    box.x0 * video.videoWidth,
+    box.y0 * video.videoHeight,
+    (box.x1 - box.x0) * video.videoWidth,
+    (box.y1 - box.y0) * video.videoHeight,
+  )
+}
+
+/** A sensible card-shaped crop from the middle of the frame, for when no card could be found. */
+export function cropCenter(video: HTMLVideoElement): HTMLCanvasElement | null {
+  const vw = video.videoWidth
+  const vh = video.videoHeight
+  if (!vw) return null
+  let cw = vw * 0.8
+  let ch = cw / CARD_ASPECT
+  if (ch > vh * 0.95) {
+    ch = vh * 0.95
+    cw = ch * CARD_ASPECT
+  }
+  return drawCrop(video, (vw - cw) / 2, (vh - ch) / 2, cw, ch)
+}
+
+/** True when a canvas came back empty or fully black (a failed draw), not just a dark picture. */
+export function isBlank(canvas: HTMLCanvasElement): boolean {
+  const probe = document.createElement('canvas')
+  probe.width = 24
+  probe.height = 24
+  const ctx = probe.getContext('2d', { willReadFrequently: true })
+  if (!ctx) return true
+  ctx.drawImage(canvas, 0, 0, 24, 24)
+  const d = ctx.getImageData(0, 0, 24, 24).data
+  let lum = 0
+  let lo = 255
+  let hi = 0
+  for (let i = 0; i < d.length; i += 4) {
+    const v = (d[i] + d[i + 1] + d[i + 2]) / 3
+    lum += v
+    lo = Math.min(lo, v)
+    hi = Math.max(hi, v)
+  }
+  return d[3] === 0 || (lum / (d.length / 4) < 3 && hi - lo < 3)
+}
+
+/**
+ * Where a frame-fraction box lands on screen. With 'contain' the whole video is visible (letterboxed);
+ * with 'cover' it fills the container and the edges are cropped away.
+ */
+export function boxToScreen(box: Box, container: DOMRect, vw: number, vh: number, fit: 'cover' | 'contain' = 'cover') {
+  const scale = fit === 'contain' ? Math.min(container.width / vw, container.height / vh) : Math.max(container.width / vw, container.height / vh)
+  const offX = (container.width - vw * scale) / 2
+  const offY = (container.height - vh * scale) / 2
   return {
-    left: box.x0 * vw * scale - offX,
-    top: box.y0 * vh * scale - offY,
+    left: box.x0 * vw * scale + offX,
+    top: box.y0 * vh * scale + offY,
     width: (box.x1 - box.x0) * vw * scale,
     height: (box.y1 - box.y0) * vh * scale,
   }

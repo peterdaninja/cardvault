@@ -485,6 +485,14 @@
   accent-color: var(--accent);
 }
 
+/* Auto scan shows the camera's whole picture (not a cropped slice), so what you see is what it reads */
+.bulk-cam {
+  flex: 0 0 54%;
+}
+.bulk-cam video {
+  object-fit: contain;
+}
+
 /* The box that locks onto the card in Auto scan */
 .found {
   position: absolute;

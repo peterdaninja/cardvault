@@ -1,7 +1,7 @@
-import { changedFraction, detectCardBox, meanDiff, type Box, type FrameSig } from './frame'
+import { changedFraction, changedFractionIn, detectCardBox, meanDiff, type Box, type FrameSig } from './frame'
 
-export const PRESENT_FRACTION = 0.06 // this share of the frame differs from the empty mount => something is there
-export const CHANGED_FRACTION = 0.06 // this share differs from the last captured card => it was removed or swapped
+export const PRESENT_FRACTION = 0.012 // this share of the frame differs from the empty mount => something is there
+export const CHANGED_IN_CARD = 0.15 // this share of the captured card area changed => it was removed or swapped
 export const STABLE_DIFF = 3 // average frame-to-frame difference below this => holding still
 export const STABLE_TICKS = 4 // ...for this many frames (about 0.6s) before capturing
 
@@ -24,6 +24,7 @@ export interface TrackResult {
 export class CardTracker {
   private baseline: FrameSig | null = null
   private captured: FrameSig | null = null
+  private capturedBox: Box | null = null
   private last: FrameSig | null = null
   private armed = true
   private stable = 0
@@ -42,8 +43,9 @@ export class CardTracker {
   }
 
   /** The picture was taken (automatically or by hand): don't take another until the card changes. */
-  markCaptured(frame: FrameSig) {
+  markCaptured(frame: FrameSig, box: Box | null = null) {
     this.captured = frame
+    this.capturedBox = box
     this.armed = false
     this.stable = 0
   }
@@ -59,7 +61,13 @@ export class CardTracker {
     this.last = frame
 
     if (!this.armed) {
-      if (this.captured && changedFraction(frame, this.captured) > CHANGED_FRACTION) {
+      // Only the card's own area counts, so a hand reaching in next to it doesn't trigger a second scan.
+      const moved = this.captured
+        ? this.capturedBox
+          ? changedFractionIn(frame, this.captured, this.capturedBox) > CHANGED_IN_CARD
+          : changedFraction(frame, this.captured) > 0.05
+        : false
+      if (moved) {
         this.armed = true // the card was taken away or swapped
         this.stable = 0
       } else {
@@ -73,6 +81,11 @@ export class CardTracker {
     }
 
     const box = this.find(frame)
+    if (!box) {
+      // Something changed but it doesn't look like a card (a hand, a shadow): keep waiting.
+      this.stable = 0
+      return { state: 'moving', box: null }
+    }
     this.stable = prevDiff < STABLE_DIFF ? this.stable + 1 : 0
     if (this.stable >= STABLE_TICKS) return { state: 'capture', box }
     return { state: this.stable > 0 ? 'holding' : 'moving', box }
