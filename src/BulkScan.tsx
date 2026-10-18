@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { CardTracker } from './lib/autoscan'
-import { beep, boxToScreen, cropBox, cropCenter, frameSignature, isBlank, type Box, type FrameSig } from './lib/frame'
+import { beep, boxToScreen, cropBox, frameSignature, isBlank, type Box, type FrameSig } from './lib/frame'
 import { toOwned, type CatalogCard } from './lib/catalog'
 import { adapterFor } from './lib/games'
 import { CAMERA_CONSTRAINTS, keepFocused, ZONES } from './lib/zones'
@@ -32,32 +32,54 @@ interface AddedItem {
 }
 
 const TICK_MS = 150
+const CARD_ASPECT = 63 / 88
+const FRAME_KEY = 'slowtcg-frame-v1'
+// A starting spot for a card standing in a mount, a little below the middle of a portrait picture.
+const DEFAULT_FRAME: Box = { x0: 0.28, y0: 0.335, x1: 0.74, y1: 0.696 }
 
-/** Hands-free scanning for a phone on a mount: feed cards one after another and they add themselves. */
+function loadFrame(): Box {
+  try {
+    const b = JSON.parse(localStorage.getItem(FRAME_KEY) ?? 'null') as Box | null
+    if (b && b.x1 > b.x0 && b.y1 > b.y0 && b.x0 >= 0 && b.y0 >= 0 && b.x1 <= 1 && b.y1 <= 1) return b
+  } catch {
+    /* fall through to the default */
+  }
+  return DEFAULT_FRAME
+}
+
+/**
+ * Hands-free scanning for a phone on a mount. You set a green frame once, over where the mount holds
+ * a card. Then it only watches inside that frame, so shifting light elsewhere cannot fool it.
+ */
 export default function BulkScan({ collections, defaultCollectionId, onAdd, onClose }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const boxRef = useRef<HTMLDivElement>(null)
 
   const [collectionId, setCollectionId] = useState(defaultCollectionId)
   const [running, setRunning] = useState(false)
-  const [status, setStatus] = useState('Mount the phone and empty the scan area, then tap Start. The card is found automatically.')
+  const [status, setStatus] = useState('')
   const [added, setAdded] = useState<AddedItem[]>([])
   const [review, setReview] = useState<ReviewItem[]>([])
   const [error, setError] = useState('')
-  const [detected, setDetected] = useState<Box | null>(null) // where the card was found in the frame
+  const [frame, setFrame] = useState<Box>(loadFrame)
+  const [cardIn, setCardIn] = useState(false) // a card is in the frame right now
+  const [, redraw] = useState(0) // re-render once the video size is known, so the frame can be placed
 
   // Mutable loop state lives in refs so the interval never sees stale values.
   const collectionRef = useRef(collectionId)
   collectionRef.current = collectionId
   const onAddRef = useRef(onAdd)
   onAddRef.current = onAdd
-  const loop = useRef({
-    busy: false,
-    key: 0,
-    timer: 0,
-  })
+  const frameRef = useRef(frame)
+  frameRef.current = frame
+  const loop = useRef({ busy: false, key: 0, timer: 0 })
   const tracker = useRef(new CardTracker())
   const wakeLock = useRef<{ release: () => Promise<void> } | null>(null)
+  const drag = useRef<{ mode: 'move' | 'resize'; x: number; y: number; start: Box } | null>(null)
+
+  useEffect(() => {
+    tracker.current.setFixed(frame)
+  }, [frame])
 
   useEffect(() => {
     let stream: MediaStream | undefined
@@ -91,13 +113,14 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
   async function start() {
     const l = loop.current
     setError('')
-    setStatus('Learning the empty mount…')
-    await new Promise((r) => setTimeout(r, 600))
+    setStatus('Learning the empty mount. Keep the card out and hold still…')
+    await new Promise((r) => setTimeout(r, 1200))
     const base = signature()
     if (!base) {
       setError('Camera is not ready yet. Wait a moment and tap Start again.')
       return
     }
+    tracker.current.setFixed(frameRef.current)
     tracker.current.reset(base)
     l.busy = false
     try {
@@ -110,7 +133,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
     window.clearInterval(l.timer)
     l.timer = window.setInterval(tick, TICK_MS)
     setRunning(true)
-    setStatus('Ready. Feed the first card.')
+    setStatus('Ready. Put the first card in the mount.')
   }
 
   function stop() {
@@ -118,8 +141,8 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
     wakeLock.current?.release().catch(() => {})
     wakeLock.current = null
     setRunning(false)
-    setDetected(null)
-    setStatus('Stopped.')
+    setCardIn(false)
+    setStatus('')
   }
 
   function tick() {
@@ -128,29 +151,28 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
     const sig = signature()
     if (!sig) return
 
-    // The tracker decides when to shoot: a card has arrived and stopped moving, once per card.
+    // The tracker decides when to shoot: a card has arrived in the frame and stopped moving, once per card.
     const r = tracker.current.update(sig)
     if (r.state === 'waiting') return
-    setDetected(r.box)
-    if (r.state === 'empty') setStatus('Ready. Feed the next card.')
-    else if (r.state === 'capture') capture(sig, r.box)
-    else if (r.box) {
-      const px = Math.round((r.box.x1 - r.box.x0) * (videoRef.current?.videoWidth ?? 0))
-      setStatus(px && px < 650 ? `Card found (${px}px wide). It looks small, so move the phone closer for a better read.` : 'Card found, hold still…')
-    } else setStatus('Something is there, looking for the card…')
+    setCardIn(r.state !== 'empty')
+    if (r.state === 'empty') setStatus('Ready. Put the next card in the mount.')
+    else if (r.state === 'capture') capture(sig)
+    else {
+      const px = Math.round((frameRef.current.x1 - frameRef.current.x0) * (videoRef.current?.videoWidth ?? 0))
+      setStatus(px && px < 650 ? `Card in place (the frame is ${px}px wide, which is small). Move the phone closer for a better read.` : 'Card in place, hold still…')
+    }
   }
 
   function forceScan() {
     const sig = signature()
-    if (sig && !loop.current.busy) capture(sig, tracker.current.find(sig))
+    if (sig && !loop.current.busy) capture(sig)
   }
 
-  async function capture(sig: FrameSig, box: Box | null) {
+  async function capture(sig: FrameSig) {
     const l = loop.current
     const v = videoRef.current
     if (!v) return
-    // Cut out the card that was found; if none was clearly found, take a card-shaped piece of the middle.
-    const card = (box && cropBox(v, box)) || cropCenter(v)
+    const card = cropBox(v, frameRef.current)
     if (!card) return
     l.busy = true
     if (isBlank(card)) {
@@ -159,7 +181,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
       l.busy = false
       return
     }
-    tracker.current.markCaptured(sig, box)
+    tracker.current.markCaptured(sig, frameRef.current)
     const key = ++l.key
     const thumb = makeThumb(card)
 
@@ -167,7 +189,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
       setStatus('Reading card…')
       const scan = await scanFor(gameRef.current, card, undefined, true)
       if (!scan.name && !scan.number) {
-        addReview({ key, thumb, note: 'Could not read this card.', candidates: [] })
+        addReview({ key, thumb, note: 'Could not read this card. Check the frame sits on the card.', candidates: [] })
         return
       }
       setStatus(`Looking up ${scan.name || 'card'} ${scan.number}…`)
@@ -198,7 +220,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
           ...a,
         ].slice(0, 30))
         beep(880, 110)
-        setStatus(`Added ${pick.name}. Feed the next card.`)
+        setStatus(`Added ${pick.name}. Swap in the next card.`)
       } else {
         addReview({
           key,
@@ -217,7 +239,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
   function addReview(item: ReviewItem) {
     setReview((r) => [item, ...r])
     beep(300, 220)
-    setStatus('Needs review. Feed the next card.')
+    setStatus('Needs review. Swap in the next card.')
     loop.current.busy = false
   }
 
@@ -232,6 +254,70 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
     setReview((r) => r.filter((x) => x.key !== item.key))
   }
 
+  // ───────── The green frame: drag to move, drag the corner dot to resize ─────────
+  function metrics() {
+    const c = boxRef.current!.getBoundingClientRect()
+    const v = videoRef.current!
+    const scale = Math.min(c.width / v.videoWidth, c.height / v.videoHeight)
+    return { vw: v.videoWidth, vh: v.videoHeight, scale }
+  }
+
+  function beginDrag(e: React.PointerEvent, mode: 'move' | 'resize') {
+    if (running || !videoRef.current?.videoWidth) return
+    e.preventDefault()
+    e.stopPropagation()
+    try {
+      ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    } catch {
+      /* dragging still works without capture, the finger just can't leave the frame */
+    }
+    drag.current = { mode, x: e.clientX, y: e.clientY, start: frame }
+  }
+
+  function moveDrag(e: React.PointerEvent) {
+    const d = drag.current
+    if (!d) return
+    const { vw, vh, scale } = metrics()
+    const dx = (e.clientX - d.x) / (vw * scale)
+    const dy = (e.clientY - d.y) / (vh * scale)
+    const s = d.start
+    if (d.mode === 'move') {
+      const w = s.x1 - s.x0
+      const h = s.y1 - s.y0
+      const x0 = Math.max(0, Math.min(1 - w, s.x0 + dx))
+      const y0 = Math.max(0, Math.min(1 - h, s.y0 + dy))
+      setFrame({ x0, y0, x1: x0 + w, y1: y0 + h })
+    } else {
+      // Keep the frame card-shaped as it grows or shrinks.
+      let w = Math.max(0.12, Math.min(1 - s.x0, s.x1 - s.x0 + dx))
+      let h = (w * vw) / (vh * CARD_ASPECT)
+      if (s.y0 + h > 1) {
+        h = 1 - s.y0
+        w = (h * vh * CARD_ASPECT) / vw
+      }
+      setFrame({ x0: s.x0, y0: s.y0, x1: s.x0 + w, y1: s.y0 + h })
+    }
+  }
+
+  function endDrag() {
+    if (!drag.current) return
+    drag.current = null
+    try {
+      localStorage.setItem(FRAME_KEY, JSON.stringify(frameRef.current))
+    } catch {
+      /* the frame just won't be remembered */
+    }
+  }
+
+  function resetFrame() {
+    setFrame(DEFAULT_FRAME)
+    try {
+      localStorage.removeItem(FRAME_KEY)
+    } catch {
+      /* ignore */
+    }
+  }
+
   const col = collections.find((c) => c.id === collectionId)
   const colName = col?.name ?? ''
   const setId = col?.setId
@@ -241,12 +327,23 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
   const gameRef = useRef(game)
   gameRef.current = game
 
+  const video = videoRef.current
+  const container = boxRef.current
+  const placed = video && container && video.videoWidth ? boxToScreen(frame, container.getBoundingClientRect(), video.videoWidth, video.videoHeight, 'contain') : null
+
   return (
     <div className="bulk">
       <div className="bulk-cam" ref={boxRef}>
-        <video ref={videoRef} playsInline muted />
-        {detected && videoRef.current && boxRef.current && (
-          <div className="found" style={foundStyle(detected, boxRef.current, videoRef.current)}>
+        <video ref={videoRef} playsInline muted onLoadedMetadata={() => redraw((n) => n + 1)} onResize={() => redraw((n) => n + 1)} />
+        {placed && (
+          <div
+            className={`found ${running ? 'live' : 'edit'} ${cardIn ? 'has-card' : ''}`}
+            style={{ left: placed.left, top: placed.top, width: placed.width, height: placed.height }}
+            onPointerDown={(e) => beginDrag(e, 'move')}
+            onPointerMove={moveDrag}
+            onPointerUp={endDrag}
+            onPointerCancel={endDrag}
+          >
             {ZONES[game].map((z) => (
               <span
                 key={z.label + z.box.join()}
@@ -256,6 +353,15 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
                 <i>{z.label}</i>
               </span>
             ))}
+            {!running && (
+              <span
+                className="handle"
+                onPointerDown={(e) => beginDrag(e, 'resize')}
+                onPointerMove={moveDrag}
+                onPointerUp={endDrag}
+                onPointerCancel={endDrag}
+              />
+            )}
           </div>
         )}
       </div>
@@ -268,26 +374,36 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
         </div>
 
         {!running && (
-          <label className="field">
-            Add cards to
-            <select value={collectionId} onChange={(e) => setCollectionId(e.target.value)}>
-              {collections.map((c) => (
-                <option key={c.id} value={c.id}>{c.name} · {adapterFor(c.game).label}</option>
-              ))}
-            </select>
-          </label>
+          <>
+            <ol className="steps">
+              <li>Put a card in the mount.</li>
+              <li>Drag the green frame onto it. Drag the corner dot to resize. The markers show where the name and number are read.</li>
+              <li>Take the card out, then tap Start. The frame is remembered next time.</li>
+            </ol>
+            <label className="field">
+              Add cards to
+              <select value={collectionId} onChange={(e) => setCollectionId(e.target.value)}>
+                {collections.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name} · {adapterFor(c.game).label}</option>
+                ))}
+              </select>
+            </label>
+          </>
         )}
 
         <p className={error ? 'error' : 'status'}>{error || status}</p>
 
         <div className="row">
           {!running ? (
-            <button className="primary big" onClick={start} disabled={!!error}>▶ Start with empty mount</button>
+            <>
+              <button className="grow" onClick={resetFrame}>Reset frame</button>
+              <button className="primary grow" style={{ flex: 2 }} onClick={start} disabled={!!error}>▶ Start (card out)</button>
+            </>
           ) : (
             <>
               <button className="grow" onClick={stop}>Stop</button>
               <button className="grow" onClick={forceScan}>Scan now</button>
-              <button className="grow" onClick={() => { stop(); start() }}>Recalibrate</button>
+              <button className="grow" onClick={() => { stop(); start() }}>Re-learn</button>
             </>
           )}
         </div>
@@ -298,7 +414,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
             <ul className="results">
               {review.map((item) => (
                 <li key={item.key} className="review">
-                  <img src={item.thumb} alt="scanned card" className="thumb" />
+                  {item.thumb ? <img src={item.thumb} alt="scanned card" className="thumb" /> : null}
                   <div className="meta">
                     <span>{item.note}</span>
                     <div className="cands">
@@ -336,12 +452,6 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
       </div>
     </div>
   )
-}
-
-function foundStyle(box: Box, container: HTMLElement, video: HTMLVideoElement): React.CSSProperties {
-  if (!video.videoWidth) return { display: 'none' }
-  const r = boxToScreen(box, container.getBoundingClientRect(), video.videoWidth, video.videoHeight, 'contain')
-  return { left: r.left, top: r.top, width: r.width, height: r.height }
 }
 
 function makeThumb(card: HTMLCanvasElement): string {

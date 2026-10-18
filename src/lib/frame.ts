@@ -352,3 +352,49 @@ export function boxToScreen(box: Box, container: DOMRect, vw: number, vh: number
     height: (box.y1 - box.y0) * vh * scale,
   }
 }
+
+// ───────── Watching one fixed region (for a mount where cards always sit in the same place) ─────────
+
+const clampIdx = (v: number, max: number) => Math.max(0, Math.min(max, v))
+
+function region(sig: FrameSig, box: Box) {
+  return {
+    x0: clampIdx(Math.floor(box.x0 * sig.w), sig.w - 1),
+    x1: clampIdx(Math.ceil(box.x1 * sig.w), sig.w),
+    y0: clampIdx(Math.floor(box.y0 * sig.h), sig.h - 1),
+    y1: clampIdx(Math.ceil(box.y1 * sig.h), sig.h),
+  }
+}
+
+/** Mean absolute brightness difference between two frames inside one rectangle. */
+export function meanDiffIn(a: FrameSig, b: FrameSig, box: Box): number {
+  if (a.px.length !== b.px.length) return 255
+  const r = region(a, box)
+  let sum = 0
+  let n = 0
+  for (let y = r.y0; y < r.y1; y++) {
+    for (let x = r.x0; x < r.x1; x++) {
+      sum += Math.abs(a.px[y * a.w + x] - b.px[y * a.w + x])
+      n++
+    }
+  }
+  return n ? sum / n : 0
+}
+
+/**
+ * How much fine detail is inside a rectangle (average brightness step between neighbouring pixels).
+ * A card's printed artwork is full of detail; bare metal and soft patches of sunlight are not.
+ */
+export function textureIn(sig: FrameSig, box: Box): number {
+  const r = region(sig, box)
+  let sum = 0
+  let n = 0
+  for (let y = r.y0; y < r.y1 - 1; y++) {
+    for (let x = r.x0; x < r.x1 - 1; x++) {
+      const i = y * sig.w + x
+      sum += Math.abs(sig.px[i] - sig.px[i + 1]) + Math.abs(sig.px[i] - sig.px[i + sig.w])
+      n++
+    }
+  }
+  return n ? sum / n : 0
+}

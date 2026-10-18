@@ -487,7 +487,43 @@
 
 /* Auto scan shows the camera's whole picture (not a cropped slice), so what you see is what it reads */
 .bulk-cam {
-  flex: 0 0 54%;
+  flex: 0 0 56%;
+}
+.found.edit {
+  transition: none; /* follow the finger exactly while positioning */
+  pointer-events: auto;
+  cursor: move;
+  touch-action: none;
+  border-style: dashed;
+  border-color: var(--accent-2);
+  background: rgba(255, 148, 64, 0.06);
+}
+.found.live {
+  border-color: rgba(255, 255, 255, 0.55);
+  box-shadow: none;
+}
+.found.live.has-card {
+  border-color: var(--good);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.35), 0 0 18px color-mix(in srgb, var(--good) 55%, transparent);
+}
+.handle {
+  position: absolute;
+  right: -17px;
+  bottom: -17px;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--accent-2);
+  border: 3px solid #fff;
+  touch-action: none;
+  cursor: nwse-resize;
+}
+.steps {
+  margin: 4px 0 12px;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--muted);
 }
 .bulk-cam video {
   object-fit: contain;
