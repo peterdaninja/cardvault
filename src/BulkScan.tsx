@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { beep, cropGuide, guideSignature, sigDiff } from './lib/frame'
+import { CardTracker } from './lib/autoscan'
+import { beep, boxToScreen, cropBox, cropGuide, frameSignature, type Box, type FrameSig } from './lib/frame'
 import { toOwned, type CatalogCard } from './lib/catalog'
 import { adapterFor } from './lib/games'
 import { CAMERA_CONSTRAINTS, keepFocused, ZONES } from './lib/zones'
@@ -32,10 +33,6 @@ interface AddedItem {
 
 const RATIO = 63 / 88
 const TICK_MS = 150
-const PRESENT_DIFF = 14 // guide area differs from the empty mount by this much => something is there
-const CHANGED_DIFF = 14 // guide area differs from the last captured card by this much => card swapped/removed
-const STABLE_DIFF = 3 // frame-to-frame difference below this => holding still
-const STABLE_TICKS = 4 // ...for this many ticks (about 0.6s) before capturing
 
 /** Hands-free scanning for a phone on a mount: feed cards one after another and they add themselves. */
 export default function BulkScan({ collections, defaultCollectionId, onAdd, onClose }: Props) {
@@ -45,10 +42,11 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
 
   const [collectionId, setCollectionId] = useState(defaultCollectionId)
   const [running, setRunning] = useState(false)
-  const [status, setStatus] = useState('Mount the phone, empty the scan area, then tap Start.')
+  const [status, setStatus] = useState('Mount the phone and empty the scan area, then tap Start. The card is found automatically.')
   const [added, setAdded] = useState<AddedItem[]>([])
   const [review, setReview] = useState<ReviewItem[]>([])
   const [error, setError] = useState('')
+  const [detected, setDetected] = useState<Box | null>(null) // where the card was found in the frame
 
   // Mutable loop state lives in refs so the interval never sees stale values.
   const collectionRef = useRef(collectionId)
@@ -57,14 +55,10 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
   onAddRef.current = onAdd
   const loop = useRef({
     busy: false,
-    armed: true,
-    stable: 0,
-    baseline: null as Uint8Array | null,
-    captured: null as Uint8Array | null,
-    last: null as Uint8Array | null,
     key: 0,
     timer: 0,
   })
+  const tracker = useRef(new CardTracker())
   const wakeLock = useRef<{ release: () => Promise<void> } | null>(null)
 
   useEffect(() => {
@@ -93,9 +87,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
 
   function signature() {
     const v = videoRef.current
-    const b = boxRef.current
-    const g = guideRef.current
-    return v && b && g ? guideSignature(v, b, g) : null
+    return v ? frameSignature(v) : null
   }
 
   async function start() {
@@ -108,11 +100,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
       setError('Camera is not ready yet. Wait a moment and tap Start again.')
       return
     }
-    l.baseline = base
-    l.captured = null
-    l.last = null
-    l.armed = true
-    l.stable = 0
+    tracker.current.reset(base)
     l.busy = false
     try {
       // Keep the screen awake while scanning.
@@ -132,55 +120,41 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
     wakeLock.current?.release().catch(() => {})
     wakeLock.current = null
     setRunning(false)
+    setDetected(null)
     setStatus('Stopped.')
   }
 
   function tick() {
     const l = loop.current
-    if (l.busy || !l.baseline) return
+    if (l.busy || !tracker.current.ready) return
     const sig = signature()
     if (!sig) return
 
-    const prevDiff = l.last ? sigDiff(sig, l.last) : 99
-    l.last = sig
-    const present = sigDiff(sig, l.baseline) > PRESENT_DIFF
-
-    if (!l.armed) {
-      // After a capture, wait until the card is removed or replaced before looking again.
-      if (l.captured && sigDiff(sig, l.captured) > CHANGED_DIFF) {
-        l.armed = true
-        l.stable = 0
-      } else {
-        return
-      }
-    }
-    if (!present) {
-      l.stable = 0
-      setStatus('Ready. Feed the next card.')
-      return
-    }
-    l.stable = prevDiff < STABLE_DIFF ? l.stable + 1 : 0
-    if (l.stable >= STABLE_TICKS) capture(sig)
-    else setStatus('Card detected, hold still…')
+    // The tracker decides when to shoot: a card has arrived and stopped moving, once per card.
+    const r = tracker.current.update(sig)
+    if (r.state === 'waiting') return
+    setDetected(r.box)
+    if (r.state === 'empty') setStatus('Ready. Feed the next card.')
+    else if (r.state === 'capture') capture(sig, r.box)
+    else setStatus(r.box ? 'Card found, hold still…' : 'Something is there, hold still…')
   }
 
   function forceScan() {
     const sig = signature()
-    if (sig && !loop.current.busy) capture(sig)
+    if (sig && !loop.current.busy) capture(sig, tracker.current.find(sig))
   }
 
-  async function capture(sig: Uint8Array) {
+  async function capture(sig: FrameSig, box: Box | null) {
     const l = loop.current
     const v = videoRef.current
     const b = boxRef.current
     const g = guideRef.current
     if (!v || !b || !g) return
-    const card = cropGuide(v, b, g)
+    // Cut out the card that was found; if none was clearly found, fall back to the on-screen outline.
+    const card = (box && cropBox(v, box)) || cropGuide(v, b, g)
     if (!card) return
     l.busy = true
-    l.armed = false
-    l.captured = sig
-    l.stable = 0
+    tracker.current.markCaptured(sig)
     const key = ++l.key
     const thumb = makeThumb(card)
 
@@ -266,7 +240,20 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
     <div className="bulk">
       <div className="bulk-cam" ref={boxRef}>
         <video ref={videoRef} playsInline muted />
-        <div className="guide" ref={guideRef} style={{ aspectRatio: String(RATIO), height: '90%' }}>
+        {detected && videoRef.current && boxRef.current && (
+          <div className="found" style={foundStyle(detected, boxRef.current, videoRef.current)}>
+            {ZONES[game].map((z) => (
+              <span
+                key={z.label + z.box.join()}
+                className="zone"
+                style={{ left: `${z.box[0] * 100}%`, top: `${z.box[1] * 100}%`, width: `${(z.box[2] - z.box[0]) * 100}%`, height: `${(z.box[3] - z.box[1]) * 100}%` }}
+              >
+                <i>{z.label}</i>
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="guide" ref={guideRef} style={{ aspectRatio: String(RATIO), height: '84%', opacity: detected ? 0 : 1 }}>
           {ZONES[game].map((z) => (
             <span
               key={z.label + z.box.join()}
@@ -355,6 +342,12 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
       </div>
     </div>
   )
+}
+
+function foundStyle(box: Box, container: HTMLElement, video: HTMLVideoElement): React.CSSProperties {
+  if (!video.videoWidth) return { display: 'none' }
+  const r = boxToScreen(box, container.getBoundingClientRect(), video.videoWidth, video.videoHeight)
+  return { left: r.left, top: r.top, width: r.width, height: r.height }
 }
 
 function makeThumb(card: HTMLCanvasElement): string {

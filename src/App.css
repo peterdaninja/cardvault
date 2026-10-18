@@ -698,7 +698,7 @@ button.ghost {
 }
 .bulk-cam {
   position: relative;
-  flex: 0 0 42%;
+  flex: 0 0 48%;
   background: #000;
   display: flex;
   align-items: center;

@@ -485,6 +485,16 @@
   accent-color: var(--accent);
 }
 
+/* The box that locks onto the card in Auto scan */
+.found {
+  position: absolute;
+  pointer-events: none;
+  border: 3px solid var(--good);
+  border-radius: 10px;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.35), 0 0 18px color-mix(in srgb, var(--good) 55%, transparent);
+  transition: left 0.12s linear, top 0.12s linear, width 0.12s linear, height 0.12s linear;
+}
+
 /* Reading-zone markers on the camera guide */
 .zone {
   position: absolute;
