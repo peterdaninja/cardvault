@@ -571,3 +571,24 @@
   font-weight: 700;
   color: var(--gold);
 }
+
+/* Review rows */
+.review .raw {
+  display: block;
+  margin-top: 4px;
+  font-size: 10px;
+  line-height: 1.3;
+  color: var(--muted);
+  word-break: break-word;
+}
+.review .thumb {
+  cursor: zoom-in;
+}
+.review .bigthumb {
+  display: block;
+  width: 100%;
+  max-width: 280px;
+  margin-top: 8px;
+  border-radius: 8px;
+  cursor: zoom-out;
+}

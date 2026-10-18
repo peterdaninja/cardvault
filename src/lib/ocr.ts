@@ -5,6 +5,7 @@ export interface ScanResult {
   name: string
   number: string // collector number, e.g. "58" (from "58/102") or "TG05"
   total: string // printed set total, e.g. "102", when visible
+  numberConfident: boolean // true when two separate reads agreed on the number
   nameConfident: boolean // true when the name matched a known Pokémon closely
   rawText: string // what the reader saw, shown to the user for debugging
 }
@@ -38,12 +39,16 @@ export function prep(
   card: HTMLCanvasElement,
   [x0, y0, x1, y1]: [number, number, number, number],
   invert: boolean,
+  /** Turn the strip into crisp black-on-white using the local brightness, which copes with glare and uneven light. */
+  binary = false,
+  /** Enlarge or shrink the strip to this height in pixels (text reads best when letters are about 25-40px tall). */
+  stripPx?: number,
 ): HTMLCanvasElement {
   const sx = Math.round(card.width * x0)
   const sy = Math.round(card.height * y0)
   const sw = Math.max(1, Math.round(card.width * (x1 - x0)))
   const sh = Math.max(1, Math.round(card.height * (y1 - y0)))
-  const scale = Math.min(4, Math.max(1, 1000 / sw))
+  const scale = stripPx ? Math.min(6, Math.max(0.3, stripPx / sh)) : Math.min(4, Math.max(1, 1000 / sw))
   const w = Math.round(sw * scale)
   const h = Math.round(sh * scale)
 
@@ -74,6 +79,32 @@ export function prep(
     if (invert) g = 255 - g
     d[i] = d[i + 1] = d[i + 2] = g
     d[i + 3] = 255
+  }
+  if (binary) {
+    // Compare each pixel with the average of its surroundings (an integral image makes that fast).
+    const W = w + 1
+    const integral = new Float64Array(W * (h + 1))
+    for (let y = 0; y < h; y++) {
+      let row = 0
+      for (let x = 0; x < w; x++) {
+        row += d[(y * w + x) * 4]
+        integral[(y + 1) * W + (x + 1)] = integral[y * W + (x + 1)] + row
+      }
+    }
+    const r = Math.max(8, Math.round(Math.min(w, h) / 3))
+    for (let y = 0; y < h; y++) {
+      const y0 = Math.max(0, y - r)
+      const y1 = Math.min(h, y + r + 1)
+      for (let x = 0; x < w; x++) {
+        const x0 = Math.max(0, x - r)
+        const x1 = Math.min(w, x + r + 1)
+        const sum = integral[y1 * W + x1] - integral[y0 * W + x1] - integral[y1 * W + x0] + integral[y0 * W + x0]
+        const mean = sum / ((x1 - x0) * (y1 - y0))
+        const i = (y * w + x) * 4
+        const v = d[i] < mean * 0.9 ? 0 : 255
+        d[i] = d[i + 1] = d[i + 2] = v
+      }
+    }
   }
   ctx.putImageData(img, 0, 0)
 
@@ -117,6 +148,13 @@ export function parseNumber(text: string): { number: string; total: string } {
   // Promos without a total: "SWSH039", "SVP 012"
   const p = text.match(/\b(SWSH|SVP|SM|XY|BW|HGSS|DP|SVP|MEP)\s?(\d{1,3})\b/)
   if (p) return { number: p[1] + p[2].padStart(3, '0'), total: '' }
+  // The slash is the part small print most often loses: it comes back as a 7, a 1, or just a space.
+  // Take the first three digits as the number and leave the (less trustworthy) total blank.
+  const q = text.match(/(?:^|[^\d])(\d{3})\s?[7|1]\s?\d{2,3}(?:[^\d]|$)/) ?? text.match(/(?:^|[^\d])(\d{3})\s+\d{3}(?:[^\d]|$)/)
+  if (q) {
+    const n = parseInt(q[1], 10)
+    if (n >= 1 && n <= 999) return { number: String(n), total: '' }
+  }
   return { number: '', total: '' }
 }
 
@@ -135,9 +173,13 @@ export async function scanCanvas(
   onProgress?: (msg: string) => void,
   /** Bulk mode: stop reading as soon as the name and number are clear, instead of trying every variant. */
   fast = false,
+  /** Names of the cards in the set being scanned. Matching against just these is far more reliable than against every Pokémon. */
+  vocabulary?: string[],
 ): Promise<ScanResult> {
   onProgress?.('Loading text reader…')
-  const [worker, species] = await Promise.all([getWorker(), getSpeciesNames()])
+  const [worker, allSpecies] = await Promise.all([getWorker(), getSpeciesNames()])
+  const useVocab = !!vocabulary && vocabulary.length > 0
+  const species = useVocab ? vocabulary! : allSpecies
 
   onProgress?.('Reading card name…')
   const nameTexts: string[] = []
@@ -158,9 +200,13 @@ export async function scanCanvas(
 
   let name = ''
   if (best && best.score >= 0.72) {
-    // Wildcard search later handles variants (ex, V, regional forms); keep the first word for hyphenated names.
-    name = best.species.split('-')[0]
-    name = name.charAt(0).toUpperCase() + name.slice(1)
+    if (useVocab) {
+      name = best.species // already the card's real name from this set
+    } else {
+      // Wildcard search later handles variants (ex, V, regional forms); keep the first word for hyphenated names.
+      name = best.species.split('-')[0]
+      name = name.charAt(0).toUpperCase() + name.slice(1)
+    }
   } else {
     // Trainer / Energy cards and anything not a Pokémon: use the cleaned first line.
     const line = nameTexts[0]
@@ -174,12 +220,14 @@ export async function scanCanvas(
   const numTexts: string[] = []
   const votes = new Map<string, { count: number; totals: Map<string, number> }>()
   // Most reliable reads first, so fast mode can stop after two agreeing results.
-  const numberPasses: [number, boolean, '6' | '7'][] = [
-    [0, true, '7'], [0, true, '6'], [1, true, '7'], [1, true, '6'],
-    [0, false, '7'], [1, false, '7'], [0, false, '6'], [1, false, '6'],
+  // band, invert, page mode, strip height in pixels. Small print reads best at a few different sizes,
+  // so each strip is tried at more than one and the results vote. Strongest first, so fast mode can stop early.
+  const numberPasses: [number, boolean, '6' | '7', number][] = [
+    [0, true, '7', 190], [0, true, '7', 260], [0, true, '7', 130], [0, false, '7', 190], [0, true, '6', 190],
+    [1, true, '7', 190], [1, true, '7', 260], [1, true, '7', 130], [1, false, '7', 190], [1, true, '6', 190],
   ]
-  for (const [bandIndex, invert, psm] of numberPasses) {
-    const t = await read(worker, prep(card, NUMBER_BANDS[bandIndex], invert), psm, psm === '7' ? NUMBER_CHARS : '')
+  for (const [bandIndex, invert, psm, stripPx] of numberPasses) {
+    const t = await read(worker, prep(card, NUMBER_BANDS[bandIndex], invert, false, stripPx), psm, psm === '7' ? NUMBER_CHARS : '')
     numTexts.push(t)
     const p = parseNumber(t)
     if (!p.number) continue
@@ -207,6 +255,7 @@ export async function scanCanvas(
     name,
     number,
     total,
+    numberConfident: top >= 2,
     nameConfident: !!best && best.score >= 0.85,
     rawText: `Name: ${squash(nameTexts.find((t) => t.trim()) ?? "")} | Number: ${squash(numTexts.filter(Boolean).join(' / ')).slice(0, 80)}`,
   }

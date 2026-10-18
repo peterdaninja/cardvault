@@ -10,6 +10,8 @@ export function scanFor(
   card: HTMLCanvasElement,
   onProgress?: (msg: string) => void,
   fast = false,
+  /** Names of the cards in the collection's set, when it has one. */
+  vocabulary?: string[],
 ): Promise<ScanResult> {
-  return game === 'yugioh' ? scanYgo(card, onProgress, fast) : scanCanvas(card, onProgress, fast)
+  return game === 'yugioh' ? scanYgo(card, onProgress, fast) : scanCanvas(card, onProgress, fast, vocabulary)
 }

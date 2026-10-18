@@ -95,6 +95,7 @@ export async function scanYgo(
     name,
     number: code,
     total: '',
+    numberConfident: top >= 2,
     nameConfident: top >= 2,
     rawText: `Name: ${squash(nameTexts.find((t) => t.trim()) ?? '')} | Code: ${squash(codeTexts.filter(Boolean).join(' / ')).slice(0, 80)}`,
   }

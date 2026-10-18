@@ -53,6 +53,7 @@ export function bestSpecies(text: string, species: string[]): NameMatch | null {
     .filter((w) => w.length >= 3)
   const grams = new Set(words)
   for (let i = 0; i < words.length - 1; i++) grams.add(words[i] + words[i + 1])
+  for (let i = 0; i < words.length - 2; i++) grams.add(words[i] + words[i + 1] + words[i + 2])
   if (!grams.size || !species.length) return null
 
   const normalized = species.map((s) => ({ s, n: norm(s) }))

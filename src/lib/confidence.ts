@@ -32,8 +32,17 @@ export function confidentMatch(
     return scan.nameConfident || s >= 0.6 ? r : null
   }
 
-  if (setLocked && !!scan.number && results.length === 1) {
-    if (scan.nameConfident || nameSim(scan.name, results[0].name) >= 0.6) return results[0]
+  if (setLocked && results.length === 1) {
+    // Inside one set a collector number, or a name, points to a single card.
+    const r = results[0]
+    const sim = nameSim(scan.name, r.name)
+    if (scan.number) {
+      if (scan.nameConfident || sim >= 0.6) return r
+      // A number read twice is trustworthy; only refuse if a clearly different name was read.
+      if (scan.numberConfident && (scan.name.length < 4 || sim >= 0.35)) return r
+    } else if (scan.nameConfident) {
+      return r
+    }
   }
   if (!(scan.nameConfident && !!scan.number)) return null
   if (results.length === 1) return results[0]

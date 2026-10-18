@@ -20,6 +20,8 @@ interface Props {
 interface ReviewItem {
   key: number
   thumb: string
+  big?: string // a larger picture to look at when tapped
+  raw?: string // what the reader actually saw, to help work out why a card was missed
   note: string
   candidates: CatalogCard[]
 }
@@ -68,6 +70,8 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
   const [cameraId, setCameraId] = useState<string | undefined>(savedCameraId)
   const [info, setInfo] = useState<CameraInfo | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
+  const vocabRef = useRef<string[] | undefined>(undefined) // names of the cards in this collection's set
+  const [zoomKey, setZoomKey] = useState<number | null>(null)
   const [, redraw] = useState(0) // re-render once the video size is known, so the frame can be placed
 
   // Mutable loop state lives in refs so the interval never sees stale values.
@@ -204,12 +208,13 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
     tracker.current.markCaptured(sig, frameRef.current)
     const key = ++l.key
     const thumb = makeThumb(card)
+    const big = makeThumb(card, 420, 0.8)
 
     try {
       setStatus('Reading card…')
-      const scan = await scanFor(gameRef.current, card, undefined, true)
+      const scan = await scanFor(gameRef.current, card, undefined, true, vocabRef.current)
       if (!scan.name && !scan.number) {
-        addReview({ key, thumb, note: 'Could not read this card. Check the frame sits on the card.', candidates: [] })
+        addReview({ key, thumb, big, raw: scan.rawText, note: 'Could not read this card. Check the frame sits on the card.', candidates: [] })
         return
       }
       setStatus(`Looking up ${scan.name || 'card'} ${scan.number}…`)
@@ -226,6 +231,8 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
         addReview({
           key,
           thumb,
+          big,
+          raw: scan.rawText,
           note: `${scan.name} ${scan.number}: ${e instanceof Error ? e.message : 'lookup failed'}`,
           candidates: [],
         })
@@ -245,6 +252,8 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
         addReview({
           key,
           thumb,
+          big,
+          raw: scan.rawText,
           note: `Read: ${scan.name || '?'} ${scan.number || '?'}${scan.total ? '/' + scan.total : ''}`,
           candidates: results.slice(0, 6),
         })
@@ -346,6 +355,22 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
   const game: Game = adapterFor(col?.game).key
   const gameRef = useRef(game)
   gameRef.current = game
+
+  // For a collection tied to one set, match what is read against that set's own card names.
+  useEffect(() => {
+    vocabRef.current = undefined
+    if (!setId) return
+    let cancelled = false
+    adapterFor(game)
+      .getSetCards(setId)
+      .then((cards) => {
+        if (!cancelled) vocabRef.current = [...new Set(cards.map((c) => c.name))]
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [setId, game])
 
   const video = videoRef.current
   const container = boxRef.current
@@ -473,9 +498,18 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
             <ul className="results">
               {review.map((item) => (
                 <li key={item.key} className="review">
-                  {item.thumb ? <img src={item.thumb} alt="scanned card" className="thumb" /> : null}
+                  {item.thumb ? (
+                    <img
+                      src={item.thumb}
+                      alt="scanned card (tap to enlarge)"
+                      className="thumb"
+                      onClick={() => setZoomKey(zoomKey === item.key ? null : item.key)}
+                    />
+                  ) : null}
                   <div className="meta">
                     <span>{item.note}</span>
+                    {item.raw && <small className="raw">{item.raw}</small>}
+                    {zoomKey === item.key && item.big && <img src={item.big} alt="" className="bigthumb" onClick={() => setZoomKey(null)} />}
                     <div className="cands">
                       {item.candidates.map((c) => (
                         <button key={c.id} onClick={() => resolve(item, c)}>
@@ -513,10 +547,10 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
   )
 }
 
-function makeThumb(card: HTMLCanvasElement): string {
+function makeThumb(card: HTMLCanvasElement, width = 90, quality = 0.7): string {
   const c = document.createElement('canvas')
-  c.width = 90
-  c.height = Math.round((card.height / card.width) * 90)
+  c.width = width
+  c.height = Math.round((card.height / card.width) * width)
   c.getContext('2d')!.drawImage(card, 0, 0, c.width, c.height)
-  return c.toDataURL('image/jpeg', 0.7)
+  return c.toDataURL('image/jpeg', quality)
 }

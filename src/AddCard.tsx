@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Camera from './Camera'
 import { toOwned, type CatalogCard } from './lib/catalog'
 import { confidentMatch } from './lib/confidence'
@@ -34,6 +34,24 @@ export default function AddCard({ collections, defaultCollectionId, onAdd, onClo
   const [error, setError] = useState('')
   const [results, setResults] = useState<CatalogCard[]>([])
   const [added, setAdded] = useState<string[]>([])
+  const [vocab, setVocab] = useState<string[] | undefined>(undefined) // names of the cards in this collection's set
+
+  // For a collection tied to one set, match what is read against that set's own card names.
+  const setId = collection?.setId
+  useEffect(() => {
+    setVocab(undefined)
+    if (!setId) return
+    let cancelled = false
+    adapter
+      .getSetCards(setId)
+      .then((cards) => {
+        if (!cancelled) setVocab([...new Set(cards.map((c) => c.name))])
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [setId, adapter])
   const [auto, setAuto] = useState<{ card: CatalogCard; collectionId: string } | null>(null)
 
   function pickCollection(id: string) {
@@ -73,7 +91,7 @@ export default function AddCard({ collections, defaultCollectionId, onAdd, onClo
     setLastRead('')
     try {
       setBusy('Preparing photo…')
-      const scanned = await scanFor(adapter.key, await getCanvas(), setBusy)
+      const scanned = await scanFor(adapter.key, await getCanvas(), setBusy, false, vocab)
       setName(scanned.name)
       setNumber(scanned.number)
       setTotal(scanned.total)
