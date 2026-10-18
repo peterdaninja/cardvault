@@ -3,7 +3,8 @@ import { CardTracker } from './lib/autoscan'
 import { beep, boxToScreen, cropBox, frameSignature, isBlank, type Box, type FrameSig } from './lib/frame'
 import { toOwned, type CatalogCard } from './lib/catalog'
 import { adapterFor } from './lib/games'
-import { CAMERA_CONSTRAINTS, keepFocused, ZONES } from './lib/zones'
+import { applyZoom, listCameras, openCamera, saveCameraId, savedCameraId, type CameraChoice, type CameraInfo } from './lib/camera'
+import { ZONES } from './lib/zones'
 import { confidentMatch } from './lib/confidence'
 import { scanFor } from './lib/scan'
 import { money } from './ui/format'
@@ -37,9 +38,9 @@ const FRAME_KEY = 'slowtcg-frame-v1'
 // A starting spot for a card standing in a mount, a little below the middle of a portrait picture.
 const DEFAULT_FRAME: Box = { x0: 0.28, y0: 0.335, x1: 0.74, y1: 0.696 }
 
-function loadFrame(): Box {
+function loadFrame(camera = ''): Box {
   try {
-    const b = JSON.parse(localStorage.getItem(FRAME_KEY) ?? 'null') as Box | null
+    const b = JSON.parse(localStorage.getItem(FRAME_KEY + camera) ?? 'null') as Box | null
     if (b && b.x1 > b.x0 && b.y1 > b.y0 && b.x0 >= 0 && b.y0 >= 0 && b.x1 <= 1 && b.y1 <= 1) return b
   } catch {
     /* fall through to the default */
@@ -61,8 +62,12 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
   const [added, setAdded] = useState<AddedItem[]>([])
   const [review, setReview] = useState<ReviewItem[]>([])
   const [error, setError] = useState('')
-  const [frame, setFrame] = useState<Box>(loadFrame)
+  const [frame, setFrame] = useState<Box>(() => loadFrame(''))
   const [cardIn, setCardIn] = useState(false) // a card is in the frame right now
+  const [cameras, setCameras] = useState<CameraChoice[]>([])
+  const [cameraId, setCameraId] = useState<string | undefined>(savedCameraId)
+  const [info, setInfo] = useState<CameraInfo | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
   const [, redraw] = useState(0) // re-render once the video size is known, so the frame can be placed
 
   // Mutable loop state lives in refs so the interval never sees stale values.
@@ -72,6 +77,8 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
   onAddRef.current = onAdd
   const frameRef = useRef(frame)
   frameRef.current = frame
+  const infoRef = useRef<CameraInfo | null>(null)
+  infoRef.current = info
   const loop = useRef({ busy: false, key: 0, timer: 0 })
   const tracker = useRef(new CardTracker())
   const wakeLock = useRef<{ release: () => Promise<void> } | null>(null)
@@ -81,25 +88,38 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
     tracker.current.setFixed(frame)
   }, [frame])
 
+  // Open the chosen camera (or the default back camera). Changing the choice reopens it.
   useEffect(() => {
-    let stream: MediaStream | undefined
     let cancelled = false
-    navigator.mediaDevices
-      ?.getUserMedia(CAMERA_CONSTRAINTS)
-      .then((s) => {
-        if (cancelled) return s.getTracks().forEach((t) => t.stop())
-        stream = s
-        keepFocused(s)
+    let opened: MediaStream | undefined
+    setError('')
+    openCamera(cameraId)
+      .then(async ({ stream, info: i }) => {
+        if (cancelled) return stream.getTracks().forEach((t) => t.stop())
+        opened = stream
+        streamRef.current = stream
         if (videoRef.current) {
-          videoRef.current.srcObject = s
+          videoRef.current.srcObject = stream
           videoRef.current.play().catch(() => {})
         }
+        setInfo(i)
+        setFrame(loadFrame(i.label))
+        setCameras(await listCameras())
       })
-      .catch(() => setError('Camera not available. Allow camera access and reopen this screen.'))
-    if (!navigator.mediaDevices) setError('Camera not available in this browser.')
+      .catch(() => {
+        if (cameraId) {
+          saveCameraId('') // the saved camera is gone or unavailable; fall back to the default
+          setCameraId(undefined)
+        } else setError('Camera not available. Allow camera access and reopen this screen.')
+      })
     return () => {
       cancelled = true
-      stream?.getTracks().forEach((t) => t.stop())
+      opened?.getTracks().forEach((t) => t.stop())
+    }
+  }, [cameraId])
+
+  useEffect(() => {
+    return () => {
       window.clearInterval(loop.current.timer)
       wakeLock.current?.release().catch(() => {})
     }
@@ -159,7 +179,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
     else if (r.state === 'capture') capture(sig)
     else {
       const px = Math.round((frameRef.current.x1 - frameRef.current.x0) * (videoRef.current?.videoWidth ?? 0))
-      setStatus(px && px < 650 ? `Card in place (the frame is ${px}px wide, which is small). Move the phone closer for a better read.` : 'Card in place, hold still…')
+      setStatus(px && px < 650 ? `Card in place (the frame is ${px}px wide, which is small). Move the phone closer${cameras.some((c) => /tele/i.test(c.label)) ? ' or pick the Telephoto camera' : ''} for a better read.` : 'Card in place, hold still…')
     }
   }
 
@@ -303,7 +323,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
     if (!drag.current) return
     drag.current = null
     try {
-      localStorage.setItem(FRAME_KEY, JSON.stringify(frameRef.current))
+      localStorage.setItem(FRAME_KEY + (infoRef.current?.label ?? ''), JSON.stringify(frameRef.current))
     } catch {
       /* the frame just won't be remembered */
     }
@@ -312,7 +332,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
   function resetFrame() {
     setFrame(DEFAULT_FRAME)
     try {
-      localStorage.removeItem(FRAME_KEY)
+      localStorage.removeItem(FRAME_KEY + (info?.label ?? ''))
     } catch {
       /* ignore */
     }
@@ -380,6 +400,45 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
               <li>Drag the green frame onto it. Drag the corner dot to resize. The markers show where the name and number are read.</li>
               <li>Take the card out, then tap Start. The frame is remembered next time.</li>
             </ol>
+            {cameras.length > 1 && (
+              <label className="field">
+                Camera
+                <select
+                  value={info?.deviceId ?? ''}
+                  onChange={(e) => {
+                    saveCameraId(e.target.value)
+                    setCameraId(e.target.value)
+                  }}
+                >
+                  {cameras.map((c) => (
+                    <option key={c.id} value={c.id}>{c.label}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {info && (
+              <p className="hint" style={{ margin: '0 2px 10px' }}>
+                {info.label} · picture {info.width}×{info.height}
+                {info.width && info.width < 2500 ? '. Small for reading numbers: try the telephoto camera or move the phone closer.' : '.'}
+              </p>
+            )}
+            {info?.zoom && (
+              <label className="field">
+                Zoom
+                <input
+                  type="range"
+                  min={info.zoom.min}
+                  max={info.zoom.max}
+                  step={info.zoom.step}
+                  value={info.zoom.value}
+                  onChange={(e) => {
+                    const z = Number(e.target.value)
+                    setInfo((cur) => (cur && cur.zoom ? { ...cur, zoom: { ...cur.zoom, value: z } } : cur))
+                    if (streamRef.current) applyZoom(streamRef.current, z)
+                  }}
+                />
+              </label>
+            )}
             <label className="field">
               Add cards to
               <select value={collectionId} onChange={(e) => setCollectionId(e.target.value)}>
