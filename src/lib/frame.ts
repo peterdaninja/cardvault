@@ -405,7 +405,7 @@ export function textureIn(sig: FrameSig, box: Box): number {
  * proportions. Falls back to the frame itself whenever the result is not clearly a card of the
  * same size, so this can only help.
  */
-export function refineCardBox(cur: FrameSig, base: FrameSig, frame: Box, margin = 0.2): Box {
+export function refineCardBox(cur: FrameSig, base: FrameSig, frame: Box, margin = 0.08): Box {
   const mask = diffMask(cur, base, 28)
   if (!mask) return frame
   const fw = frame.x1 - frame.x0
@@ -451,12 +451,14 @@ export function refineCardBox(cur: FrameSig, base: FrameSig, frame: Box, margin 
   const bw = x1 - x0
   const bh = y1 - y0
   // It must be about the size of the frame: otherwise something else changed (a hand, a shadow).
-  if (bw < fw * 0.7 || bw > fw * 1.3 || bh < fh * 0.7 || bh > fh * 1.3) return frame
+  if (bw < fw * 0.9 || bw > fw * 1.1 || bh < fh * 0.9 || bh > fh * 1.1) return frame
+  // ...and sit close to where the frame is. The frame is what the user lined up, so only allow a small nudge.
+  if (Math.abs((x0 + x1) / 2 - (frame.x0 + frame.x1) / 2) > fw * 0.06 || Math.abs((y0 + y1) / 2 - (frame.y0 + frame.y1) / 2) > fh * 0.06) return frame
   // Widen the short side to the card's proportions (dark borders are easy to miss), then pad a little.
   const cx = (x0 + x1) / 2
   const cy = (y0 + y1) / 2
-  const nw = Math.max(bw, (bh * h * CARD_ASPECT) / w) * 1.04
-  const nh = Math.max(bh, (bw * w) / CARD_ASPECT / h) * 1.04
+  const nw = Math.max(bw, (bh * h * CARD_ASPECT) / w)
+  const nh = Math.max(bh, (bw * w) / CARD_ASPECT / h)
   x0 = Math.max(0, cx - nw / 2)
   x1 = Math.min(1, cx + nw / 2)
   y0 = Math.max(0, cy - nh / 2)
