@@ -1,6 +1,7 @@
 import type { CatalogCard } from './catalog'
 import { levenshtein, norm } from './names'
 import type { ScanResult } from './scan'
+import type { MatchResult } from './imagematch'
 import type { Game } from './types'
 
 export const nameSim = (x: string, y: string) => {
@@ -51,4 +52,54 @@ export function confidentMatch(
     if (sameTotal.length === 1) return sameTotal[0]
   }
   return null
+}
+
+// How sure the picture match must be. A real photo with glare scored about 0.77 with a lead of 0.30;
+// unrelated cards score around 0.45, so these leave room while staying careful.
+export const PICTURE_SCORE = 0.6
+export const PICTURE_LEAD = 0.15
+const PICTURE_STRONG_SCORE = 0.75
+const PICTURE_STRONG_LEAD = 0.25
+
+export interface Decision {
+  pick: CatalogCard | null // add this one without asking
+  candidates: CatalogCard[] // otherwise offer these, best first
+}
+
+/**
+ * Decide what to do with a scan, using both what was read (text) and what the card looks like (picture).
+ *  - Text and picture agree, or only one is available and sure: add it.
+ *  - They strongly disagree, or neither is sure: ask, with the picture's best guesses first.
+ */
+export function decide(
+  results: CatalogCard[],
+  game: Game,
+  scan: ScanResult,
+  setLocked: boolean,
+  picture: MatchResult | null,
+): Decision {
+  const textPick = confidentMatch(results, game, scan, setLocked)
+  const pictureSure = !!picture && picture.best.score >= PICTURE_SCORE && picture.margin >= PICTURE_LEAD
+  const pictureCards = picture ? picture.top.slice(0, 3).map((t) => t.card) : []
+  const merge = (...lists: CatalogCard[][]) => {
+    const seen = new Set<string>()
+    return lists.flat().filter((c) => (seen.has(c.id) ? false : (seen.add(c.id), true)))
+  }
+
+  if (textPick) {
+    const strongDisagree =
+      !!picture &&
+      picture.best.card.id !== textPick.id &&
+      picture.best.score >= PICTURE_STRONG_SCORE &&
+      picture.margin >= PICTURE_STRONG_LEAD
+    if (strongDisagree) return { pick: null, candidates: merge([picture!.best.card], [textPick], results) }
+    return { pick: textPick, candidates: [] }
+  }
+
+  if (pictureSure) {
+    // The text could not confirm it. Only refuse if it confidently named a clearly different card.
+    const clash = scan.nameConfident && scan.name.length >= 4 && nameSim(scan.name, picture!.best.card.name) < 0.4
+    if (!clash) return { pick: picture!.best.card, candidates: [] }
+  }
+  return { pick: null, candidates: merge(pictureCards, results) }
 }

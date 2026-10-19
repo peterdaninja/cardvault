@@ -3,7 +3,7 @@ import {
   changedFractionIn,
   detectCardBox,
   meanDiff,
-  meanDiffIn,
+  refineCardBox,
   textureIn,
   type Box,
   type FrameSig,
@@ -11,10 +11,13 @@ import {
 
 export const PRESENT_FRACTION = 0.012 // (searching mode) this share of the frame differs from the empty mount
 export const CHANGED_IN_CARD = 0.15 // (searching mode) this share of the captured card area changed
-export const STABLE_DIFF = 3 // average frame-to-frame difference below this => holding still
+export const STABLE_DIFF = 3 // (searching mode) // average frame-to-frame difference below this => holding still
 export const STABLE_TICKS = 4 // ...for this many frames (about 0.6s) before capturing
 
 // Fixed-frame mode: watch one rectangle where the mount always holds the card.
+export const STABLE_PIXEL_DIFF = 22 // a pixel counts as moved if it changed by more than this after exposure is levelled out
+export const STABLE_CHANGED = 0.04 // still = fewer than this share of the frame's pixels moved since the last look
+export const FORCE_AFTER_TICKS = 16 // a card that has been there this long (about 2.4s) is scanned even if it never looks still
 export const FIXED_PRESENT = 0.3 // this share of the frame region changed since the empty mount...
 export const FIXED_DETAIL_RATIO = 1.8 // ...and it has this much more fine detail than the empty region
 export const FIXED_DETAIL_MIN = 2
@@ -49,6 +52,7 @@ export class CardTracker {
   private last: FrameSig | null = null
   private armed = true
   private stable = 0
+  private presentTicks = 0
   private fixed: Box | null = null
 
   get ready() {
@@ -69,6 +73,7 @@ export class CardTracker {
     this.last = null
     this.armed = true
     this.stable = 0
+    this.presentTicks = 0
   }
 
   /** The picture was taken (automatically or by hand): don't take another until the card changes. */
@@ -77,6 +82,12 @@ export class CardTracker {
     this.capturedBox = box
     this.armed = false
     this.stable = 0
+    this.presentTicks = 0
+  }
+
+  /** Where the card really is, close to the fixed frame (it is not always seated in exactly the same spot). */
+  refine(frame: FrameSig): Box | null {
+    return this.baseline && this.fixed ? refineCardBox(frame, this.baseline, this.fixed) : this.fixed
   }
 
   /** Where a card is in this frame, searching the whole picture against the empty mount. */
@@ -105,7 +116,9 @@ export class CardTracker {
   }
 
   private updateFixed(frame: FrameSig, box: Box): TrackResult {
-    const prevDiff = this.last ? meanDiffIn(frame, this.last, box) : 99
+    // Moved = how much of the frame changed since the last look. Judged after levelling out overall
+    // brightness, so flicker, exposure changes and shimmering foil do not count as movement.
+    const movedFraction = this.last ? changedFractionIn(frame, this.last, box, STABLE_PIXEL_DIFF) : 1
     this.last = frame
     const present = this.presentInFixed(frame)
 
@@ -123,10 +136,12 @@ export class CardTracker {
 
     if (!present) {
       this.stable = 0
+      this.presentTicks = 0
       return { state: 'empty', box }
     }
-    this.stable = prevDiff < STABLE_DIFF ? this.stable + 1 : 0
-    if (this.stable >= STABLE_TICKS) return { state: 'capture', box }
+    this.presentTicks++
+    this.stable = movedFraction < STABLE_CHANGED ? this.stable + 1 : 0
+    if (this.stable >= STABLE_TICKS || this.presentTicks >= FORCE_AFTER_TICKS) return { state: 'capture', box }
     return { state: this.stable > 0 ? 'holding' : 'moving', box }
   }
 

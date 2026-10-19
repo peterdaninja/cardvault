@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import Camera from './Camera'
 import { toOwned, type CatalogCard } from './lib/catalog'
-import { confidentMatch } from './lib/confidence'
+import { decide } from './lib/confidence'
+import { SetMatcher } from './lib/imagematch'
 import { adapterFor } from './lib/games'
 import { getAutoAdd } from './lib/prefs'
 import { fileToCanvas } from './lib/ocr'
@@ -34,18 +35,28 @@ export default function AddCard({ collections, defaultCollectionId, onAdd, onClo
   const [error, setError] = useState('')
   const [results, setResults] = useState<CatalogCard[]>([])
   const [added, setAdded] = useState<string[]>([])
+  const matcherRef = useRef<SetMatcher | null>(null) // recognises a card by its picture, for Pokémon sets
   const [vocab, setVocab] = useState<string[] | undefined>(undefined) // names of the cards in this collection's set
 
   // For a collection tied to one set, match what is read against that set's own card names.
   const setId = collection?.setId
   useEffect(() => {
     setVocab(undefined)
+    matcherRef.current = null
     if (!setId) return
     let cancelled = false
     adapter
       .getSetCards(setId)
       .then((cards) => {
-        if (!cancelled) setVocab([...new Set(cards.map((c) => c.name))])
+        if (cancelled) return
+        setVocab([...new Set(cards.map((c) => c.name))])
+        if (adapter.key === 'pokemon' && cards.length) {
+          SetMatcher.build(setId, cards)
+            .then((m) => {
+              if (!cancelled) matcherRef.current = m
+            })
+            .catch(() => {})
+        }
       })
       .catch(() => {})
     return () => {
@@ -91,24 +102,32 @@ export default function AddCard({ collections, defaultCollectionId, onAdd, onClo
     setLastRead('')
     try {
       setBusy('Preparing photo…')
-      const scanned = await scanFor(adapter.key, await getCanvas(), setBusy, false, vocab)
+      const photo = await getCanvas()
+      const scanned = await scanFor(adapter.key, photo, setBusy, false, vocab)
       setName(scanned.name)
       setNumber(scanned.number)
       setTotal(scanned.total)
       setTrustName(scanned.nameConfident)
       setLastRead(scanned.rawText)
-      if (!scanned.name && !scanned.number) {
+      if (!scanned.name && !scanned.number && !matcherRef.current) {
         setBusy('')
         setError('Could not read the card. Try again with less glare, or type the name.')
         return
       }
       const found = await search(scanned.name, scanned.number, scanned.total, scanned.nameConfident)
+      // Also recognise the card by its picture, then combine that with what was read.
+      const img = matcherRef.current?.match(photo) ?? null
+      const decision = decide(found, adapter.key, scanned, !!collection?.setId, img)
       // One clear match: add it without making the person tap, and offer Undo.
-      const pick = getAutoAdd() ? confidentMatch(found, adapter.key, scanned, !!collection?.setId) : null
+      const pick = getAutoAdd() ? decision.pick : null
       if (pick) {
         add(pick)
         setAuto({ card: pick, collectionId })
         setResults([])
+        setError('')
+      } else if (decision.candidates.length) {
+        setError('')
+        setResults(decision.candidates.concat(found.filter((f) => !decision.candidates.some((c) => c.id === f.id))))
       }
     } catch (e) {
       setBusy('')

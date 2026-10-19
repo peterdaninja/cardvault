@@ -398,3 +398,68 @@ export function textureIn(sig: FrameSig, box: Box): number {
   }
   return n ? sum / n : 0
 }
+
+/**
+ * The card is not always seated exactly where the frame was drawn. Look just around the frame for
+ * where the card really is (what changed since the empty mount) and return that, widened to card
+ * proportions. Falls back to the frame itself whenever the result is not clearly a card of the
+ * same size, so this can only help.
+ */
+export function refineCardBox(cur: FrameSig, base: FrameSig, frame: Box, margin = 0.2): Box {
+  const mask = diffMask(cur, base, 28)
+  if (!mask) return frame
+  const fw = frame.x1 - frame.x0
+  const fh = frame.y1 - frame.y0
+  const R = {
+    x0: Math.max(0, frame.x0 - fw * margin),
+    x1: Math.min(1, frame.x1 + fw * margin),
+    y0: Math.max(0, frame.y0 - fh * margin),
+    y1: Math.min(1, frame.y1 + fh * margin),
+  }
+  const { w, h } = cur
+  const px0 = Math.floor(R.x0 * w)
+  const px1 = Math.ceil(R.x1 * w)
+  const py0 = Math.floor(R.y0 * h)
+  const py1 = Math.ceil(R.y1 * h)
+  const rows = new Float32Array(py1 - py0)
+  const cols = new Float32Array(px1 - px0)
+  for (let y = py0; y < py1; y++) {
+    for (let x = px0; x < px1; x++) {
+      if (mask[y * w + x]) {
+        rows[y - py0]++
+        cols[x - px0]++
+      }
+    }
+  }
+  const span = (counts: Float32Array): [number, number] | null => {
+    const peak = Math.max(...counts)
+    if (peak < counts.length * 0.12) return null
+    const cut = peak * 0.5
+    let lo = 0
+    let hi = counts.length - 1
+    while (lo < hi && counts[lo] < cut) lo++
+    while (hi > lo && counts[hi] < cut) hi--
+    return [lo, hi]
+  }
+  const sx = span(cols)
+  const sy = span(rows)
+  if (!sx || !sy) return frame
+  let x0 = (px0 + sx[0]) / w
+  let x1 = (px0 + sx[1] + 1) / w
+  let y0 = (py0 + sy[0]) / h
+  let y1 = (py0 + sy[1] + 1) / h
+  const bw = x1 - x0
+  const bh = y1 - y0
+  // It must be about the size of the frame: otherwise something else changed (a hand, a shadow).
+  if (bw < fw * 0.7 || bw > fw * 1.3 || bh < fh * 0.7 || bh > fh * 1.3) return frame
+  // Widen the short side to the card's proportions (dark borders are easy to miss), then pad a little.
+  const cx = (x0 + x1) / 2
+  const cy = (y0 + y1) / 2
+  const nw = Math.max(bw, (bh * h * CARD_ASPECT) / w) * 1.04
+  const nh = Math.max(bh, (bw * w) / CARD_ASPECT / h) * 1.04
+  x0 = Math.max(0, cx - nw / 2)
+  x1 = Math.min(1, cx + nw / 2)
+  y0 = Math.max(0, cy - nh / 2)
+  y1 = Math.min(1, cy + nh / 2)
+  return { x0, y0, x1, y1 }
+}

@@ -5,7 +5,8 @@ import { toOwned, type CatalogCard } from './lib/catalog'
 import { adapterFor } from './lib/games'
 import { applyZoom, listCameras, openCamera, saveCameraId, savedCameraId, type CameraChoice, type CameraInfo } from './lib/camera'
 import { ZONES } from './lib/zones'
-import { confidentMatch } from './lib/confidence'
+import { confidentMatch, decide } from './lib/confidence'
+import { SetMatcher } from './lib/imagematch'
 import { scanFor, type ScanResult } from './lib/scan'
 import { money } from './ui/format'
 import type { Collection, Game, OwnedCard } from './lib/types'
@@ -79,6 +80,8 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onUn
   const vocabRef = useRef<string[] | undefined>(undefined) // names of the cards in this collection's set
   const [zoomKey, setZoomKey] = useState<number | null>(null)
   const [adjusting, setAdjusting] = useState(false) // the frame is being moved, so watching is paused
+  const matcherRef = useRef<SetMatcher | null>(null) // recognises a card by its picture, for Pokémon sets
+  const [pics, setPics] = useState<{ state: 'none' | 'loading' | 'ready' | 'failed'; done: number; total: number }>({ state: 'none', done: 0, total: 0 })
   const [setReady, setSetReady] = useState<{ state: 'none' | 'loading' | 'ready' | 'failed'; count: number }>({ state: 'none', count: 0 })
   const [, redraw] = useState(0) // re-render once the video size is known, so the frame can be placed
 
@@ -249,7 +252,9 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onUn
     const l = loop.current
     const v = videoRef.current
     if (!v) return
-    const card = cropBox(v, frameRef.current)
+    // Cut out the card where it really sits, which can differ a little from where the frame was drawn.
+    const where = tracker.current.refine(sig) ?? frameRef.current
+    const card = cropBox(v, where)
     if (!card) return
     l.busy = true
     if (isBlank(card)) {
@@ -266,34 +271,30 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onUn
     try {
       setStatus('Reading card…')
       const scan = await scanFor(gameRef.current, card, undefined, true, vocabRef.current)
-      if (!scan.name && !scan.number) {
-        addReview({ key, thumb, big, raw: scan.rawText, note: 'Could not read this card. Check the frame sits on the card.', candidates: [] })
-        return
-      }
-      setStatus(`Looking up ${scan.name || 'card'} ${scan.number}…`)
+      // Also recognise the card by its picture, when this collection is tied to a Pokémon set.
+      const img = matcherRef.current?.match(card) ?? null
+      const raw =
+        scan.rawText + (img ? ` | picture: ${img.best.card.name} #${img.best.card.number} score ${img.best.score.toFixed(2)}, lead ${img.margin.toFixed(2)}` : '')
+
       let results: CatalogCard[] = []
-      try {
-        results = await adapterFor(gameRef.current).findCards({
-          name: scan.name,
-          number: scan.number,
-          total: scan.total,
-          trustName: scan.nameConfident,
-          setId: setIdRef.current,
-        })
-      } catch (e) {
-        addReview({
-          key,
-          thumb,
-          big,
-          raw: scan.rawText,
-          scan,
-          note: `${scan.name} ${scan.number}: ${e instanceof Error ? e.message : 'lookup failed'}`,
-          candidates: [],
-        })
-        return
+      let lookupError: unknown = null
+      if (scan.name || scan.number) {
+        setStatus(`Looking up ${scan.name || 'card'} ${scan.number}…`)
+        try {
+          results = await adapterFor(gameRef.current).findCards({
+            name: scan.name,
+            number: scan.number,
+            total: scan.total,
+            trustName: scan.nameConfident,
+            setId: setIdRef.current,
+          })
+        } catch (e) {
+          lookupError = e
+        }
       }
 
-      const pick = confidentMatch(results, gameRef.current, scan, !!setIdRef.current)
+      const decision = decide(results, gameRef.current, scan, !!setIdRef.current, img)
+      const pick = decision.pick
       if (pick) {
         onAddRef.current(toOwned(pick, collectionRef.current))
         setAdded((a) => [
@@ -302,14 +303,26 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onUn
         ].slice(0, 30))
         beep(880, 110)
         setStatus(`Added ${pick.name}. Swap in the next card.`)
+      } else if (lookupError && !decision.candidates.length) {
+        addReview({
+          key,
+          thumb,
+          big,
+          raw,
+          scan,
+          note: `${scan.name} ${scan.number}: ${lookupError instanceof Error ? lookupError.message : 'lookup failed'}`,
+          candidates: [],
+        })
+      } else if (!scan.name && !scan.number && !decision.candidates.length) {
+        addReview({ key, thumb, big, raw, note: 'Could not read this card. Check the frame sits on the card.', candidates: [] })
       } else {
         addReview({
           key,
           thumb,
           big,
-          raw: scan.rawText,
-          note: `Read: ${scan.name || '?'} ${scan.number || '?'}${scan.total ? '/' + scan.total : ''}`,
-          candidates: results.slice(0, 6),
+          raw,
+          note: scan.name || scan.number ? `Read: ${scan.name || '?'} ${scan.number || '?'}${scan.total ? '/' + scan.total : ''}` : 'Could not read the text. The closest pictures are below.',
+          candidates: decision.candidates.slice(0, 6),
         })
       }
     } catch (e) {
@@ -444,6 +457,8 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onUn
   // For a collection tied to one set, match what is read against that set's own card names.
   useEffect(() => {
     vocabRef.current = undefined
+    matcherRef.current = null
+    setPics({ state: 'none', done: 0, total: 0 })
     if (!setId) {
       setSetReady({ state: 'none', count: 0 })
       return
@@ -456,6 +471,20 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onUn
         if (cancelled) return
         vocabRef.current = [...new Set(cards.map((c) => c.name))]
         setSetReady({ state: cards.length ? 'ready' : 'failed', count: cards.length })
+        if (game === 'pokemon' && cards.length) {
+          setPics({ state: 'loading', done: 0, total: cards.length })
+          SetMatcher.build(setId, cards, (done, total) => {
+            if (!cancelled) setPics({ state: 'loading', done, total })
+          })
+            .then((m) => {
+              if (cancelled) return
+              matcherRef.current = m
+              setPics({ state: m.size ? 'ready' : 'failed', done: m.size, total: cards.length })
+            })
+            .catch(() => {
+              if (!cancelled) setPics({ state: 'failed', done: 0, total: cards.length })
+            })
+        }
       })
       .catch(() => {
         if (!cancelled) setSetReady({ state: 'failed', count: 0 })
@@ -564,6 +593,15 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onUn
                   : setReady.state === 'loading'
                     ? 'Loading this set\'s cards…'
                     : 'Could not load this set\'s cards. Connect to the internet once and reopen Auto scan.'}
+              </p>
+            )}
+            {pics.state !== 'none' && (
+              <p className={pics.state === 'failed' ? 'error' : 'hint'} style={{ margin: '0 2px 10px' }}>
+                {pics.state === 'ready'
+                  ? '✓ Picture matching is ready: cards are also recognised by their artwork, not just their text.'
+                  : pics.state === 'loading'
+                    ? `Learning the pictures in this set… ${pics.done}/${pics.total}`
+                    : 'Picture matching is not available yet (the card pictures could not be loaded). Text reading still works.'}
               </p>
             )}
             <label className="field">
