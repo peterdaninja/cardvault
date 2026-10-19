@@ -132,13 +132,17 @@ export async function read(worker: Worker, canvas: HTMLCanvasElement, psm: '6' |
 const DIGIT_FIX: Record<string, string> = { O: '0', o: '0', I: '1', l: '1', '|': '1', S: '5', B: '8' }
 const fixDigits = (s: string) => s.replace(/[OoIl|SB]/g, (c) => DIGIT_FIX[c])
 
+const SUBSET_PREFIX = /^(TG|GG|SV|RC|H|PR|SWSH|SVP|SM|XY|BW|HGSS|DP|MEP|SH)$/
+
 export function parseNumber(text: string): { number: string; total: string } {
   // "058/102", "TG05/TG30", "SV012/SV122", tolerant of O/I misreads inside the digits.
   const m = text.match(/([A-Z]{0,4}[\dOIl|]{1,3})\s*\/\s*([A-Z]{0,4}[\dOIl|]{2,3})/)
   if (m) {
     const part = (s: string) => {
-      const letters = s.match(/^[A-Z]*/)![0]
+      let letters = s.match(/^[A-Z]*/)![0]
       const digits = fixDigits(s.slice(letters.length))
+      // Only real subset prefixes (TG05, SV012, SWSH039). Stray letters from nearby print ("VED115") are noise.
+      if (letters && !SUBSET_PREFIX.test(letters)) letters = ''
       return letters ? letters + digits : String(parseInt(digits, 10))
     }
     const number = part(m[1])

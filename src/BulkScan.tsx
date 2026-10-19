@@ -6,7 +6,7 @@ import { adapterFor } from './lib/games'
 import { applyZoom, listCameras, openCamera, saveCameraId, savedCameraId, type CameraChoice, type CameraInfo } from './lib/camera'
 import { ZONES } from './lib/zones'
 import { confidentMatch } from './lib/confidence'
-import { scanFor } from './lib/scan'
+import { scanFor, type ScanResult } from './lib/scan'
 import { money } from './ui/format'
 import type { Collection, Game, OwnedCard } from './lib/types'
 
@@ -22,6 +22,7 @@ interface ReviewItem {
   thumb: string
   big?: string // a larger picture to look at when tapped
   raw?: string // what the reader actually saw, to help work out why a card was missed
+  scan?: ScanResult // set when the lookup failed on the network, so it can be tried again
   note: string
   candidates: CatalogCard[]
 }
@@ -72,6 +73,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
   const streamRef = useRef<MediaStream | null>(null)
   const vocabRef = useRef<string[] | undefined>(undefined) // names of the cards in this collection's set
   const [zoomKey, setZoomKey] = useState<number | null>(null)
+  const [setReady, setSetReady] = useState<{ state: 'none' | 'loading' | 'ready' | 'failed'; count: number }>({ state: 'none', count: 0 })
   const [, redraw] = useState(0) // re-render once the video size is known, so the frame can be placed
 
   // Mutable loop state lives in refs so the interval never sees stale values.
@@ -233,6 +235,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
           thumb,
           big,
           raw: scan.rawText,
+          scan,
           note: `${scan.name} ${scan.number}: ${e instanceof Error ? e.message : 'lookup failed'}`,
           candidates: [],
         })
@@ -270,6 +273,37 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
     beep(300, 220)
     setStatus('Needs review. Swap in the next card.')
     loop.current.busy = false
+  }
+
+  /** Look a card up again after a network failure, using what was already read from it. */
+  async function retry(item: ReviewItem) {
+    const scan = item.scan
+    if (!scan) return
+    setReview((r) => r.map((x) => (x.key === item.key ? { ...x, note: 'Looking up again…' } : x)))
+    try {
+      const results = await adapterFor(gameRef.current).findCards({
+        name: scan.name,
+        number: scan.number,
+        total: scan.total,
+        trustName: scan.nameConfident,
+        setId: setIdRef.current,
+      })
+      const pick = confidentMatch(results, gameRef.current, scan, !!setIdRef.current)
+      if (pick) {
+        resolve(item, pick)
+        beep(880, 110)
+      } else {
+        setReview((r) =>
+          r.map((x) =>
+            x.key === item.key
+              ? { ...x, scan: undefined, candidates: results.slice(0, 6), note: `Read: ${scan.name || '?'} ${scan.number || '?'}` }
+              : x,
+          ),
+        )
+      }
+    } catch (e) {
+      setReview((r) => r.map((x) => (x.key === item.key ? { ...x, note: e instanceof Error ? e.message : 'Still cannot reach the card database.' } : x)))
+    }
   }
 
   function resolve(item: ReviewItem, card?: CatalogCard) {
@@ -359,14 +393,22 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
   // For a collection tied to one set, match what is read against that set's own card names.
   useEffect(() => {
     vocabRef.current = undefined
-    if (!setId) return
+    if (!setId) {
+      setSetReady({ state: 'none', count: 0 })
+      return
+    }
     let cancelled = false
+    setSetReady({ state: 'loading', count: 0 })
     adapterFor(game)
       .getSetCards(setId)
       .then((cards) => {
-        if (!cancelled) vocabRef.current = [...new Set(cards.map((c) => c.name))]
+        if (cancelled) return
+        vocabRef.current = [...new Set(cards.map((c) => c.name))]
+        setSetReady({ state: cards.length ? 'ready' : 'failed', count: cards.length })
       })
-      .catch(() => {})
+      .catch(() => {
+        if (!cancelled) setSetReady({ state: 'failed', count: 0 })
+      })
     return () => {
       cancelled = true
     }
@@ -464,6 +506,15 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
                 />
               </label>
             )}
+            {setReady.state !== 'none' && (
+              <p className={setReady.state === 'failed' ? 'error' : 'hint'} style={{ margin: '0 2px 10px' }}>
+                {setReady.state === 'ready'
+                  ? `✓ All ${setReady.count} cards of ${col?.setName ?? 'this set'} are stored on this phone, so cards are matched instantly, even offline.`
+                  : setReady.state === 'loading'
+                    ? 'Loading this set\'s cards…'
+                    : 'Could not load this set\'s cards. Connect to the internet once and reopen Auto scan.'}
+              </p>
+            )}
             <label className="field">
               Add cards to
               <select value={collectionId} onChange={(e) => setCollectionId(e.target.value)}>
@@ -518,7 +569,10 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
                       ))}
                     </div>
                   </div>
-                  <button onClick={() => resolve(item)}>Skip</button>
+                  <div className="row-actions">
+                    {item.scan && <button className="primary" onClick={() => retry(item)}>Try again</button>}
+                    <button onClick={() => resolve(item)}>Skip</button>
+                  </div>
                 </li>
               ))}
             </ul>

@@ -592,3 +592,10 @@
   border-radius: 8px;
   cursor: zoom-out;
 }
+
+.review .row-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: none;
+}
