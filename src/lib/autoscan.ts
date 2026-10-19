@@ -16,8 +16,10 @@ export const STABLE_TICKS = 4 // ...for this many frames (about 0.6s) before cap
 
 // Fixed-frame mode: watch one rectangle where the mount always holds the card.
 export const FIXED_PRESENT = 0.3 // this share of the frame region changed since the empty mount...
-export const FIXED_DETAIL_RATIO = 1.35 // ...and it has this much more fine detail than the empty region
-export const FIXED_DETAIL_MIN = 0.8
+export const FIXED_DETAIL_RATIO = 1.8 // ...and it has this much more fine detail than the empty region
+export const FIXED_DETAIL_MIN = 2
+export const FIXED_OCCUPIED_DETAIL = 11 // an "empty" frame with this much fine detail probably had a card in it
+export const FIXED_ABS_DETAIL = 12 // ...in which case a new card is recognised by its own detail instead
 export const FIXED_SWAPPED = 0.4 // this share changed since the captured card => a different card
 
 export type TrackState =
@@ -82,11 +84,19 @@ export class CardTracker {
     return this.baseline ? detectCardBox(frame, this.baseline) : null
   }
 
+  /** True when the learned "empty mount" looks like it actually had a card in it. */
+  get baselineOccupied() {
+    return this.baselineDetail >= FIXED_OCCUPIED_DETAIL
+  }
+
   /** Is there a card in the fixed frame right now? */
   private presentInFixed(frame: FrameSig): boolean {
     if (!this.baseline || !this.fixed) return false
     if (changedFractionIn(frame, this.baseline, this.fixed) < FIXED_PRESENT) return false
-    return textureIn(frame, this.fixed) >= this.baselineDetail * FIXED_DETAIL_RATIO + FIXED_DETAIL_MIN
+    const detail = textureIn(frame, this.fixed)
+    if (detail >= this.baselineDetail * FIXED_DETAIL_RATIO + FIXED_DETAIL_MIN) return true
+    // If the "empty" picture had a card in it, a new card cannot be more detailed than that; judge it by its own detail.
+    return this.baselineDetail >= FIXED_OCCUPIED_DETAIL && detail >= FIXED_ABS_DETAIL
   }
 
   update(frame: FrameSig): TrackResult {

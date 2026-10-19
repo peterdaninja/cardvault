@@ -14,6 +14,8 @@ interface Props {
   collections: Collection[]
   defaultCollectionId: string
   onAdd: (card: OwnedCard) => void
+  /** Take back one copy of a card that was added by mistake. */
+  onUndo: (card: CatalogCard, collectionId: string) => void
   onClose: () => void
 }
 
@@ -33,6 +35,9 @@ interface AddedItem {
   image: string
   detail: string
   price: number | null
+  card: CatalogCard
+  collectionId: string
+  scanThumb?: string // what the camera saw, to compare with the matched card
 }
 
 const TICK_MS = 150
@@ -55,7 +60,7 @@ function loadFrame(camera = ''): Box {
  * Hands-free scanning for a phone on a mount. You set a green frame once, over where the mount holds
  * a card. Then it only watches inside that frame, so shifting light elsewhere cannot fool it.
  */
-export default function BulkScan({ collections, defaultCollectionId, onAdd, onClose }: Props) {
+export default function BulkScan({ collections, defaultCollectionId, onAdd, onUndo, onClose }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const boxRef = useRef<HTMLDivElement>(null)
 
@@ -73,6 +78,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
   const streamRef = useRef<MediaStream | null>(null)
   const vocabRef = useRef<string[] | undefined>(undefined) // names of the cards in this collection's set
   const [zoomKey, setZoomKey] = useState<number | null>(null)
+  const [adjusting, setAdjusting] = useState(false) // the frame is being moved, so watching is paused
   const [setReady, setSetReady] = useState<{ state: 'none' | 'loading' | 'ready' | 'failed'; count: number }>({ state: 'none', count: 0 })
   const [, redraw] = useState(0) // re-render once the video size is known, so the frame can be placed
 
@@ -85,7 +91,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
   frameRef.current = frame
   const infoRef = useRef<CameraInfo | null>(null)
   infoRef.current = info
-  const loop = useRef({ busy: false, key: 0, timer: 0 })
+  const loop = useRef({ busy: false, key: 0, timer: 0, paused: false })
   const tracker = useRef(new CardTracker())
   const wakeLock = useRef<{ release: () => Promise<void> } | null>(null)
   const drag = useRef<{ mode: 'move' | 'resize'; x: number; y: number; start: Box } | null>(null)
@@ -136,19 +142,38 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
     return v ? frameSignature(v) : null
   }
 
-  async function start() {
-    const l = loop.current
-    setError('')
-    setStatus('Learning the empty mount. Keep the card out and hold still…')
-    await new Promise((r) => setTimeout(r, 1200))
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+  /** Count down so the mount can be emptied, then remember what it looks like empty. */
+  async function learnEmpty(): Promise<boolean> {
+    for (let s = 3; s > 0; s--) {
+      setStatus(`Take any card out of the mount. Learning the empty mount in ${s}…`)
+      await sleep(1000)
+    }
     const base = signature()
     if (!base) {
       setError('Camera is not ready yet. Wait a moment and tap Start again.')
-      return
+      return false
     }
     tracker.current.setFixed(frameRef.current)
     tracker.current.reset(base)
+    return true
+  }
+
+  function readyMessage(first: boolean) {
+    return tracker.current.baselineOccupied
+      ? 'Heads up: there still seems to be a card in the frame, so a new card may not be noticed. Take it out and tap Re-learn.'
+      : first
+        ? 'Ready. Put the first card in the mount.'
+        : 'Ready. Put the next card in the mount.'
+  }
+
+  async function start() {
+    const l = loop.current
+    setError('')
+    if (!(await learnEmpty())) return
     l.busy = false
+    l.paused = false
     try {
       // Keep the screen awake while scanning.
       const nav = navigator as Navigator & { wakeLock?: { request: (t: 'screen') => Promise<{ release: () => Promise<void> }> } }
@@ -159,7 +184,31 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
     window.clearInterval(l.timer)
     l.timer = window.setInterval(tick, TICK_MS)
     setRunning(true)
-    setStatus('Ready. Put the first card in the mount.')
+    setStatus(readyMessage(true))
+  }
+
+  /** Learn the empty mount again while running (the mount must be empty). */
+  async function relearn() {
+    const l = loop.current
+    l.paused = true
+    setAdjusting(false)
+    setCardIn(false)
+    if (await learnEmpty()) setStatus(readyMessage(false))
+    l.paused = false
+  }
+
+  /** Pause to move or resize the frame without losing what was learned about the empty mount. */
+  function toggleAdjust() {
+    const l = loop.current
+    if (!adjusting) {
+      l.paused = true
+      setAdjusting(true)
+      setStatus('Drag the green frame onto a card in the mount. Drag the dot to resize it. Tap Done when it fits.')
+    } else {
+      setAdjusting(false)
+      l.paused = false
+      setStatus(readyMessage(false))
+    }
   }
 
   function stop() {
@@ -167,13 +216,15 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
     wakeLock.current?.release().catch(() => {})
     wakeLock.current = null
     setRunning(false)
+    setAdjusting(false)
+    loop.current.paused = false
     setCardIn(false)
     setStatus('')
   }
 
   function tick() {
     const l = loop.current
-    if (l.busy || !tracker.current.ready) return
+    if (l.paused || l.busy || !tracker.current.ready) return
     const sig = signature()
     if (!sig) return
 
@@ -181,7 +232,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
     const r = tracker.current.update(sig)
     if (r.state === 'waiting') return
     setCardIn(r.state !== 'empty')
-    if (r.state === 'empty') setStatus('Ready. Put the next card in the mount.')
+    if (r.state === 'empty') setStatus(readyMessage(false))
     else if (r.state === 'capture') capture(sig)
     else {
       const px = Math.round((frameRef.current.x1 - frameRef.current.x0) * (videoRef.current?.videoWidth ?? 0))
@@ -246,7 +297,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
       if (pick) {
         onAddRef.current(toOwned(pick, collectionRef.current))
         setAdded((a) => [
-          { key, name: pick.name, image: pick.image, detail: `${pick.setName} · #${pick.number}`, price: pick.price },
+          { key, name: pick.name, image: pick.image, detail: `${pick.setName} · #${pick.number}`, price: pick.price, card: pick, collectionId: collectionRef.current, scanThumb: thumb },
           ...a,
         ].slice(0, 30))
         beep(880, 110)
@@ -310,7 +361,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
     if (card) {
       onAdd(toOwned(card, collectionId))
       setAdded((a) => [
-        { key: item.key, name: card.name, image: card.image, detail: `${card.setName} · #${card.number}`, price: card.price },
+        { key: item.key, name: card.name, image: card.image, detail: `${card.setName} · #${card.number}`, price: card.price, card, collectionId, scanThumb: item.thumb },
         ...a,
       ].slice(0, 30))
     }
@@ -326,7 +377,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
   }
 
   function beginDrag(e: React.PointerEvent, mode: 'move' | 'resize') {
-    if (running || !videoRef.current?.videoWidth) return
+    if ((running && !adjusting) || !videoRef.current?.videoWidth) return
     e.preventDefault()
     e.stopPropagation()
     try {
@@ -424,7 +475,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
         <video ref={videoRef} playsInline muted onLoadedMetadata={() => redraw((n) => n + 1)} onResize={() => redraw((n) => n + 1)} />
         {placed && (
           <div
-            className={`found ${running ? 'live' : 'edit'} ${cardIn ? 'has-card' : ''}`}
+            className={`found ${running && !adjusting ? 'live' : 'edit'} ${cardIn ? 'has-card' : ''}`}
             style={{ left: placed.left, top: placed.top, width: placed.width, height: placed.height }}
             onPointerDown={(e) => beginDrag(e, 'move')}
             onPointerMove={moveDrag}
@@ -440,7 +491,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
                 <i>{z.label}</i>
               </span>
             ))}
-            {!running && (
+            {(!running || adjusting) && (
               <span
                 className="handle"
                 onPointerDown={(e) => beginDrag(e, 'resize')}
@@ -538,7 +589,8 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
             <>
               <button className="grow" onClick={stop}>Stop</button>
               <button className="grow" onClick={forceScan}>Scan now</button>
-              <button className="grow" onClick={() => { stop(); start() }}>Re-learn</button>
+              <button className={`grow ${adjusting ? 'primary' : ''}`} onClick={toggleAdjust}>{adjusting ? 'Done' : 'Adjust frame'}</button>
+              <button className="grow" onClick={relearn} disabled={adjusting}>Re-learn</button>
             </>
           )}
         </div>
@@ -581,16 +633,25 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onCl
 
         {added.length > 0 && (
           <>
-            <h3>Recently scanned <span className="tray-total">{money(added.reduce((s, a) => s + (a.price ?? 0), 0))} total</span></h3>
+            <h3>Recently scanned <small className="muted">(left: camera, right: matched card)</small> <span className="tray-total">{money(added.reduce((s, a) => s + (a.price ?? 0), 0))} total</span></h3>
             <ul className="results">
               {added.map((a) => (
-                <li key={a.key}>
+                <li key={a.key} className="added-row">
+                  {a.scanThumb && <img src={a.scanThumb} alt="what the camera saw" className="seen" />}
                   <img src={a.image} alt={a.name} />
                   <div className="meta">
                     <strong>{a.name}</strong>
                     <span>{a.detail}</span>
+                    <b className="tray-total">{a.price != null ? money(a.price) : 'No price'}</b>
                   </div>
-                  <b className="tray-total">{a.price != null ? money(a.price) : '—'}</b>
+                  <button
+                    onClick={() => {
+                      onUndo(a.card, a.collectionId)
+                      setAdded((list) => list.filter((x) => x.key !== a.key))
+                    }}
+                  >
+                    Undo
+                  </button>
                 </li>
               ))}
             </ul>

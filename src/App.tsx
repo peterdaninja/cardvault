@@ -288,7 +288,7 @@ export default function App() {
         />
       )}
       {bulk && state.collections.length > 0 && (
-        <BulkScan collections={state.collections} defaultCollectionId={defaultCol} onAdd={addCard} onClose={() => setBulk(false)} />
+        <BulkScan collections={state.collections} defaultCollectionId={defaultCol} onAdd={addCard} onUndo={undoAdd} onClose={() => setBulk(false)} />
       )}
       {importing && (
         <Import

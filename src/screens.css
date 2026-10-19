@@ -599,3 +599,20 @@
   gap: 6px;
   flex: none;
 }
+
+/* Recently scanned rows: camera picture beside the matched card */
+.added-row .seen {
+  width: 44px;
+  opacity: 0.9;
+  border-radius: 4px;
+  outline: 2px solid var(--line);
+}
+.added-row .meta .tray-total {
+  margin-top: 2px;
+}
+.bulk h3 small {
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 11px;
+}
