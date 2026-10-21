@@ -15,6 +15,7 @@ interface Props {
   onCollect: (card: CatalogCard) => void
   onPatch: (patch: Partial<Collection>) => void
   onDelete: () => void
+  readOnly?: boolean // viewing someone else's shared vault: no editing of any kind
 }
 
 interface Item {
@@ -31,7 +32,7 @@ interface Item {
 type View = 'all' | 'owned' | 'missing'
 type Sort = 'number' | 'value'
 
-export default function CollectionView({ collection, owned, onBack, onChangeSet, onCard, onQty, onCollect, onPatch, onDelete }: Props) {
+export default function CollectionView({ collection, owned, onBack, onChangeSet, onCard, onQty, onCollect, onPatch, onDelete, readOnly }: Props) {
   const [setCards, setSetCards] = useState<CatalogCard[] | null>(null)
   const [error, setError] = useState('')
   const [view, setView] = useState<View>('all')
@@ -51,7 +52,7 @@ export default function CollectionView({ collection, owned, onBack, onChangeSet,
 
   // Collections made before logos existed pick up the set logo and full card count here.
   useEffect(() => {
-    if (!setId || (collection.setLogo && collection.setTotal)) return
+    if (readOnly || !setId || (collection.setLogo && collection.setTotal)) return
     adapter
       .getSets()
       .then((sets) => {
@@ -105,7 +106,11 @@ export default function CollectionView({ collection, owned, onBack, onChangeSet,
     <>
       <div className="cv-top">
         <button className="icon-btn" onClick={onBack} aria-label="Back"><ChevronLeft /></button>
-        <button className="setpill" onClick={onChangeSet}>{collection.setName ?? 'Any set'} <small>Change ›</small></button>
+        {readOnly ? (
+          <span className="setpill">{collection.setName ?? 'Any set'}</span>
+        ) : (
+          <button className="setpill" onClick={onChangeSet}>{collection.setName ?? 'Any set'} <small>Change ›</small></button>
+        )}
       </div>
 
       <header className="cv-head">
@@ -171,7 +176,7 @@ export default function CollectionView({ collection, owned, onBack, onChangeSet,
       {shown.length === 0 && (setCards || !setId) ? (
         <div className="empty">
           <b>{items.length === 0 ? 'No cards yet' : 'Nothing matches'}</b>
-          {items.length === 0 ? 'Tap the scan button below to add your first card.' : 'Try a different filter.'}
+          {items.length === 0 ? (readOnly ? 'This collection is empty.' : 'Tap the scan button below to add your first card.') :'Try a different filter.'}
         </div>
       ) : (
         <div className="sgrid">
@@ -183,9 +188,9 @@ export default function CollectionView({ collection, owned, onBack, onChangeSet,
               {i.owned ? (
                 <div className="act owned">
                   <span>{i.owned.qty} owned</span>
-                  <button onClick={() => onQty(i.owned!.id, 1)} aria-label="Add one more">＋</button>
+                  {!readOnly && <button onClick={() => onQty(i.owned!.id, 1)} aria-label="Add one more">＋</button>}
                 </div>
-              ) : (
+              ) : readOnly ? null : (
                 <button className="act collect" onClick={() => i.card && onCollect(i.card)}>Collect</button>
               )}
               <div className="cap">
@@ -198,9 +203,11 @@ export default function CollectionView({ collection, owned, onBack, onChangeSet,
         </div>
       )}
 
-      <div className="footer">
-        <button className="danger-link" onClick={onDelete}>Delete collection</button>
-      </div>
+      {!readOnly && (
+        <div className="footer">
+          <button className="danger-link" onClick={onDelete}>Delete collection</button>
+        </div>
+      )}
     </>
   )
 }

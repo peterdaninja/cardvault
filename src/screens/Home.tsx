@@ -9,9 +9,10 @@ interface Props {
   state: AppState
   onCard: (id: string) => void
   onStart: () => void
+  readOnly?: boolean // viewing someone else's shared vault
 }
 
-export default function Home({ state, onCard, onStart }: Props) {
+export default function Home({ state, onCard, onStart, readOnly }: Props) {
   const [range, setRange] = useState<RangeKey>('1M')
   const [hover, setHover] = useState<number | null>(null)
 
@@ -45,8 +46,8 @@ export default function Home({ state, onCard, onStart }: Props) {
         <header className="brand"><Logo height={44} /></header>
         <div className="empty big-empty">
           <b>Welcome to SLOWTCG</b>
-          Create a collection, pick a set, then scan your cards in. Your value chart and top cards will show up here.
-          <button className="primary big" onClick={onStart} style={{ marginTop: 16 }}>Get started</button>
+          {readOnly ? 'This vault has no cards yet.' : 'Create a collection, pick a set, then scan your cards in. Your value chart and top cards will show up here.'}
+          {!readOnly && <button className="primary big" onClick={onStart} style={{ marginTop: 16 }}>Get started</button>}
         </div>
       </>
     )
