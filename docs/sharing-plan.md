@@ -1,6 +1,12 @@
 # SLOWTCG: sign-in, cloud backup and read-only sharing — plan
 
-Status: **proposal, waiting for approval.** Nothing in the app changes until you say go.
+Status: **approved and implemented** (untested against a real Supabase project). Changes from the proposal as built:
+- Value history lives in one `vault_meta` row per owner instead of a `snapshots` table.
+- Deletions are real deletes (not `deleted` flags); a second device picks the cloud copy wholesale, so tombstones aren't needed yet.
+- Removing a person deletes the share row (no `revoked` column). Invite links are single-use.
+- Sign-in is a 6-digit emailed code (no passwords, and magic links don't return to an iPhone home-screen app).
+- Email invites don't send an email themselves; the friend signs in with that address and sees it under "Shared with me".
+- Files: `supabase/schema.sql`, `src/lib/sync*.ts`, `src/screens/Share.tsx`, `src/screens/SharedVault.tsx`.
 
 ## In one paragraph
 

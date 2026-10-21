@@ -25,3 +25,6 @@ dist-ssr
 
 # Local test photos (keep out of the public repo)
 test-photos/
+.env
+.env.*
+!.env.example

@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { cloudAvailable } from '../lib/syncClient'
 import { getAutoAdd, setAutoAdd } from '../lib/prefs'
 import { THEMES, applyTheme, getTheme } from '../lib/theme'
 import type { AppState } from '../lib/types'
@@ -15,9 +16,10 @@ interface Props {
   onExport: () => void
   onImport: (file: File | undefined) => void
   onImportList: () => void
+  onOpenShare: () => void
 }
 
-export default function Settings({ state, refreshing, refreshNote, onRefresh, onExport, onImport, onImportList }: Props) {
+export default function Settings({ state, refreshing, refreshNote, onRefresh, onExport, onImport, onImportList, onOpenShare }: Props) {
   const importRef = useRef<HTMLInputElement>(null)
   const [theme, setTheme] = useState(getTheme())
   const [autoAdd, setAutoAddState] = useState(getAutoAdd())
@@ -85,7 +87,7 @@ export default function Settings({ state, refreshing, refreshNote, onRefresh, on
 
       <h2 className="section">Backup</h2>
       <div className="card-panel">
-        <p>Your collection lives on this phone only. Export a backup file now and then, especially before clearing Safari data.</p>
+        <p>Your collection lives on this phone unless you turn on cloud backup. Export a backup file now and then, especially before clearing Safari data.</p>
         <div className="row" style={{ marginTop: 12 }}>
           <button className="grow" onClick={onExport}>Export backup</button>
           <button className="grow" onClick={() => importRef.current?.click()}>Import backup</button>
@@ -101,6 +103,16 @@ export default function Settings({ state, refreshing, refreshNote, onRefresh, on
           />
         </div>
       </div>
+
+      {cloudAvailable && (
+        <>
+          <h2 className="section">Account &amp; sharing</h2>
+          <div className="card-panel">
+            <p>Optional. Sign in to back up your collection and let friends view it (view only). Until you do, nothing leaves this phone.</p>
+            <button className="big" style={{ marginTop: 12 }} onClick={onOpenShare}>Account &amp; sharing</button>
+          </div>
+        </>
+      )}
 
       <p className="hint" style={{ textAlign: 'center', marginTop: 28 }}>
         SLOWTCG · Version {__BUILD__} UTC

@@ -13,6 +13,10 @@ import CollectionView from './screens/CollectionView'
 import Home from './screens/Home'
 import Import from './screens/Import'
 import Settings from './screens/Settings'
+import SharePage from './screens/Share'
+import SharedVault from './screens/SharedVault'
+import { useUser } from './lib/syncAuth'
+import { useCloudSync } from './lib/syncHook'
 import BottomNav, { type Tab } from './ui/BottomNav'
 import { money } from './ui/format'
 import { PlusIcon } from './ui/icons'
@@ -62,6 +66,21 @@ export default function App() {
   const [refreshNote, setRefreshNote] = useState('')
   const latest = useRef<AppState | null>(null)
   latest.current = state
+  // Optional cloud account + sharing. With no account (or no backend configured) none of this does anything.
+  const { user, ready } = useUser()
+  const sync = useCloudSync(state, user)
+  const [sharing, setSharing] = useState(false)
+  const [viewing, setViewing] = useState<{ ownerId: string; ownerEmail: string | null } | null>(null)
+  const [invite, setInvite] = useState<string | null>(null)
+
+  useEffect(() => {
+    const token = new URLSearchParams(location.search).get('invite')
+    if (!token) return
+    setInvite(token)
+    setTab('settings')
+    setSharing(true)
+    history.replaceState(null, '', location.pathname)
+  }, [])
 
   useEffect(() => {
     loadState().then((loaded) => {
@@ -92,6 +111,7 @@ export default function App() {
   }, [state])
 
   if (!state) return <div className="app"><p className="status">Loading…</p></div>
+  if (viewing) return <SharedVault ownerId={viewing.ownerId} ownerEmail={viewing.ownerEmail} onClose={() => setViewing(null)} />
 
   function update(next: AppState) {
     const withHistory = withSnapshot(next)
@@ -348,7 +368,21 @@ export default function App() {
   )
 
   let body: React.ReactNode
-  if (tab === 'settings') {
+  if (tab === 'settings' && sharing) {
+    body = (
+      <SharePage
+        user={user}
+        ready={ready}
+        sync={sync}
+        local={state}
+        pendingInvite={invite}
+        onClearInvite={() => setInvite(null)}
+        onRestore={update}
+        onOpenShared={(ownerId, ownerEmail) => setViewing({ ownerId, ownerEmail })}
+        onBack={() => setSharing(false)}
+      />
+    )
+  } else if (tab === 'settings') {
     body = (
       <Settings
         state={state}
@@ -358,6 +392,7 @@ export default function App() {
         onExport={() => exportJson(state)}
         onImport={onImport}
         onImportList={() => setImporting(true)}
+        onOpenShare={() => setSharing(true)}
       />
     )
   } else if (tab === 'collections' && open) {
