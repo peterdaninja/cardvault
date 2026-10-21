@@ -1,6 +1,6 @@
 import type { User } from '@supabase/supabase-js'
 import { useCallback, useEffect, useState } from 'react'
-import { deleteAccount, sendCode, signOut, verifyCode } from '../lib/syncAuth'
+import { deleteAccount, sendCode, signInWithPassword, signOut, signUpWithPassword, verifyCode } from '../lib/syncAuth'
 import { cloudAvailable } from '../lib/syncClient'
 import type { CloudSync } from '../lib/syncHook'
 import { acceptInvite, inviteByEmail, inviteByLink, inviteUrl, listMyShares, listSharedWithMe, revokeShare, type Share } from '../lib/syncShares'
@@ -67,7 +67,9 @@ export default function SharePage({ user, ready, sync, local, pendingInvite, onC
 }
 
 function SignIn({ pendingInvite }: { pendingInvite: boolean }) {
+  const [mode, setMode] = useState<'in' | 'up' | 'code'>('in')
   const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
   const [code, setCode] = useState('')
   const [sent, setSent] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -87,13 +89,45 @@ function SignIn({ pendingInvite }: { pendingInvite: boolean }) {
 
   return (
     <div className="card-panel">
-      {pendingInvite && <p><b>You have been invited to view a collection.</b> Sign in to accept.</p>}
-      <p>Sign in with your email to back up your collection and share it. We email you a 6-digit code; there is no password.</p>
+      {pendingInvite && <p><b>You have been invited to view a collection.</b> Sign in or create an account to accept.</p>}
+      <p>
+        {mode === 'up'
+          ? 'Create an account to back up your collection and share it. Pick a password you do not use anywhere else.'
+          : mode === 'in'
+            ? 'Sign in to back up your collection and share it.'
+            : 'We email you a 6-digit code, no password needed.'}
+      </p>
       <input type="email" inputMode="email" autoComplete="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} disabled={sent} />
-      {!sent ? (
-        <button className="big" style={{ marginTop: 12 }} disabled={busy || !email.includes('@')} onClick={() => run(async () => { await sendCode(email); setSent(true) })}>
-          {busy ? 'Sending…' : 'Email me a code'}
-        </button>
+      {mode !== 'code' ? (
+        <>
+          <input
+            style={{ marginTop: 12 }}
+            type="password"
+            autoComplete={mode === 'up' ? 'new-password' : 'current-password'}
+            placeholder="Password (8+ characters)"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          <button
+            className="big"
+            style={{ marginTop: 12 }}
+            disabled={busy || !email.includes('@') || password.length < 8}
+            onClick={() => run(() => (mode === 'up' ? signUpWithPassword(email, password) : signInWithPassword(email, password)))}
+          >
+            {busy ? 'Please wait…' : mode === 'up' ? 'Create account' : 'Sign in'}
+          </button>
+          <button className="danger-link" onClick={() => { setMode(mode === 'up' ? 'in' : 'up'); setError('') }}>
+            {mode === 'up' ? 'I already have an account' : 'Create a new account'}
+          </button>
+          <button className="danger-link" onClick={() => { setMode('code'); setError('') }}>Use an emailed code instead</button>
+        </>
+      ) : !sent ? (
+        <>
+          <button className="big" style={{ marginTop: 12 }} disabled={busy || !email.includes('@')} onClick={() => run(async () => { await sendCode(email); setSent(true) })}>
+            {busy ? 'Sending…' : 'Email me a code'}
+          </button>
+          <button className="danger-link" onClick={() => { setMode('in'); setError('') }}>Use a password instead</button>
+        </>
       ) : (
         <>
           <input style={{ marginTop: 12 }} inputMode="numeric" autoComplete="one-time-code" placeholder="6-digit code" value={code} onChange={(e) => setCode(e.target.value)} />
