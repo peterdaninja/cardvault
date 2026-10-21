@@ -116,7 +116,7 @@ export default function AddCard({ collections, defaultCollectionId, onAdd, onClo
       }
       const found = await search(scanned.name, scanned.number, scanned.total, scanned.nameConfident)
       // Also recognise the card by its picture, then combine that with what was read.
-      const img = matcherRef.current?.match(photo) ?? null
+      const img = (await matcherRef.current?.match(photo)) ?? null
       const decision = decide(found, adapter.key, scanned, !!collection?.setId, img)
       // One clear match: add it without making the person tap, and offer Undo.
       const pick = getAutoAdd() ? decision.pick : null

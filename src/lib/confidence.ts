@@ -54,11 +54,13 @@ export function confidentMatch(
   return null
 }
 
-// How sure the picture match must be. A real photo with glare scored about 0.77 with a lead of 0.30;
-// unrelated cards score around 0.45, so these leave room while staying careful.
-export const PICTURE_SCORE = 0.6
-export const PICTURE_LEAD = 0.15
-const PICTURE_STRONG_SCORE = 0.75
+// How sure the picture match must be (cosine similarity after centring on the set, see imagematch.ts).
+// Measured on the official 30th Celebration pictures damaged with blur, glare, low resolution, dimming, noise,
+// tighter/looser crops and rotation: at these limits no wrong card passed and about 87% of the right ones did;
+// the rest go to review. A real glary phone photo scored 0.63-0.78 with a lead of 0.23-0.40.
+export const PICTURE_SCORE = 0.45
+export const PICTURE_LEAD = 0.12
+const PICTURE_STRONG_SCORE = 0.6
 const PICTURE_STRONG_LEAD = 0.25
 
 export interface Decision {

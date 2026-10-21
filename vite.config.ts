@@ -25,6 +25,8 @@ export default defineConfig({
         ],
       },
       workbox: {
+        globIgnores: ['**/*.wasm'], // too big to precache; cached on first use instead (see below)
+        maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/images\.pokemontcg\.io\/.*/,

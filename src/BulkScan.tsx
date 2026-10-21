@@ -272,7 +272,7 @@ export default function BulkScan({ collections, defaultCollectionId, onAdd, onUn
       setStatus('Reading card…')
       const scan = await scanFor(gameRef.current, card, undefined, true, vocabRef.current)
       // Also recognise the card by its picture, when this collection is tied to a Pokémon set.
-      const img = matcherRef.current?.match(card) ?? null
+      const img = (await matcherRef.current?.match(card)) ?? null
       const raw =
         scan.rawText + (img ? ` | picture: ${img.best.card.name} #${img.best.card.number} score ${img.best.score.toFixed(2)}, lead ${img.margin.toFixed(2)}` : '')
 
